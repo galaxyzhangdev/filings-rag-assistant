@@ -1,4 +1,5 @@
 """Generate an answer to a question using retrieved filing chunks as context."""
+import json
 import time
 
 import requests
@@ -44,9 +45,41 @@ def answer(question: str, top_k: int = 5) -> dict:
     }
 
 
+def print_answer_streaming(question: str, top_k: int = 5, delay: float = 0.04) -> None:
+    """Like answer(), but prints the response token-by-token as it streams in (CLI use only)."""
+    chunks = retrieve(question, top_k=top_k)
+    context = "\n\n".join(f"[{c['ticker']} {c['year']}]\n{c['text']}" for c in chunks)
+
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": f"Excerpts:\n{context}\n\nQuestion: {question}"},
+    ]
+    resp = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers=OPENAI_HEADERS,
+        json={"model": "gpt-4.1-mini", "messages": messages, "stream": True},
+        stream=True,
+    )
+    resp.raise_for_status()
+    for line in resp.iter_lines(decode_unicode=True):
+        if not line or not line.startswith("data: "):
+            continue
+        payload = line[len("data: "):]
+        if payload == "[DONE]":
+            break
+        delta = json.loads(payload)["choices"][0]["delta"].get("content")
+        if delta:
+            for ch in delta:
+                print(ch, end="", flush=True)
+                time.sleep(delay)
+    print()
+
+
 if __name__ == "__main__":
     while True:
-        question = input("Question: ")
+        question = input("\nQuestion: ")
         if question.strip().lower() in ("exit", "quit"):
             break
-        print(f"\nAnswer: {answer(question)['answer']}\n")
+        print("\nAnswer: ", end="")
+        print_answer_streaming(question)
+        print()
