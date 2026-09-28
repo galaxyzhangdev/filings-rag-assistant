@@ -37,16 +37,14 @@ out of scope for now" section unless asked.
    filing year, chunk text) to a local file.
    - Cache by ticker: if a company's filings are already downloaded and
      chunked, don't re-fetch or re-process them.
-3. **Embedding**: embed each chunk using GitHub Models'
-   `text-embedding-3-small` (same `GITHUB_TOKEN` used for chat). Store
-   embeddings alongside the chunks (local `.json`/`.npy` file — no vector
-   database).
+3. **Embedding**: embed each chunk using OpenAI's `text-embedding-3-small`
+   (same `OPENAI_API_KEY` used for chat). Store embeddings alongside the
+   chunks (local `.json`/`.npy` file — no vector database).
 4. **Retrieval**: vector search only — embed the question, compute cosine
    similarity against all stored chunk embeddings via `numpy`, take the
    top-k highest-scoring chunks. No BM25, no hybrid retrieval for now.
 5. **Generation**: take the user's question, retrieve top-k chunks, stuff
-   them into a prompt, call `gpt-4.1-mini` (via GitHub Models) for the
-   answer.
+   them into a prompt, call OpenAI's `gpt-4.1-mini` for the answer.
 6. **Evaluation** (on Alphabet + Micron only):
    - Build a ~15-20 question eval set: factual (e.g. "what was GOOGL's
      revenue in [year]"), multi-hop (both cross-company — "which had
@@ -66,9 +64,9 @@ out of scope for now" section unless asked.
   project phase at all — do not scaffold this.
 
 ## Rate limit awareness
-GitHub Models' free tier caps low-complexity models (the embedding and
-chat models used here) at ~150 requests/day, 15/minute. This matters
-because ingestion + evaluation can add up quickly:
+OpenAI's API is billed per token, and both ingestion and evaluation can add
+up to a meaningful number of calls quickly. Keep cost and request volume
+under control:
 - Cache embeddings and chunks (see step 2) so nothing is re-embedded.
 - Cache LLM answers per (question, retrieval method) pair during
   evaluation so re-running the eval script doesn't re-call the API for
@@ -80,7 +78,7 @@ because ingestion + evaluation can add up quickly:
 - Python 3.12, `uv` for environment/dependency management.
 - `requests` + `beautifulsoup4` for fetching and parsing SEC filings.
 - `tiktoken` for token-based chunking and cost tracking.
-- LLM + embeddings via GitHub Models (`GITHUB_TOKEN` env var):
+- LLM + embeddings via OpenAI API (`OPENAI_API_KEY` env var):
   - Chat: `gpt-4.1-mini`
   - Embeddings: `text-embedding-3-small`
 - Retrieval: `numpy` (cosine similarity) only, no vector database.

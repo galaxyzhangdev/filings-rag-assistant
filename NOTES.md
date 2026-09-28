@@ -90,3 +90,75 @@
 
 - **`Path.mkdir(exist_ok=True)`** — creates a directory if it doesn't already exist, and does nothing (instead of raising an error) if it does.
   > 中文：`Path.mkdir(exist_ok=True)` 用来创建一个目录；如果目录已经存在，就什么都不做，而不会报错。
+
+## Step 3: Embedding
+
+### How this step works
+
+**`embed.py` -> `embed_texts(texts)`**
+1. Split the list of texts into fixed-size batches, since the API accepts many inputs per call but has request-size limits.
+   > 中文：把文字列表切分成固定大小的批次，因为 API 一次调用能接受多条输入，但对单次请求的大小有限制。
+2. For each batch, send it to OpenAI's embeddings endpoint and wait for a response.
+   > 中文：对每一批，发送到 OpenAI 的 embeddings 接口并等待返回结果。
+3. If the response says "rate limited" (HTTP 429), wait a bit and retry the same batch, up to a few attempts.
+   > 中文：如果返回结果提示"请求过于频繁"（HTTP 429），就等待一小段时间后重试同一批，最多重试几次。
+4. Once a batch succeeds, pull out each input's embedding vector from the response and add it to the running list.
+   > 中文：一批成功后，从返回结果里取出每条输入对应的向量，加入到结果列表中。
+5. After all batches are done, return the full list of embedding vectors, in the same order as the input texts.
+   > 中文：所有批次都处理完后，按照输入文字的原始顺序，返回完整的向量列表。
+
+**`embed.py` -> `embed_ticker(ticker)`**
+1. Get the ticker's chunks by calling `ingest_ticker(ticker)` (from step 2), which itself returns cached chunks if they already exist.
+   > 中文：调用第二步写的 `ingest_ticker(ticker)` 获取该股票代码的分块（如果已经缓存过，会直接拿到缓存结果）。
+2. Check whether the first chunk already has an `embedding` field; if so, everything is already embedded, so return the chunks as-is with no API calls.
+   > 中文：检查第一个分块里是否已经有 `embedding` 字段；如果有，说明已经全部生成过向量，直接返回，不再调用 API。
+3. Otherwise, call `embed_texts` on every chunk's text and attach the resulting vector to each chunk as its `embedding` field.
+   > 中文：如果还没有，就对所有分块的文字调用 `embed_texts`，并把生成的向量作为 `embedding` 字段加到每个分块上。
+4. Save the updated chunks (now including embeddings) back to the same cache file used in step 2, then return them.
+   > 中文：把带有向量的分块重新保存到第二步用的那个缓存文件里，然后返回这些分块。
+
+### Terms
+
+- **Embedding** — a vector (list of numbers) that represents the meaning of a piece of text, produced by a model trained for this purpose; texts with similar meaning end up with similar vectors, which is what makes similarity search possible later.
+  > 中文：embedding（嵌入向量）是用一个专门训练的模型，把一段文字转换成一串数字（向量），代表这段文字的语义。意思相近的文字，生成的向量也会比较接近，这就是后面能做相似度搜索的基础。
+
+- **Batching requests** — sending several inputs in a single API call instead of one call per input, to reduce the number of network round trips and stay efficient.
+  > 中文：批处理请求指的是一次 API 调用里发送多条输入，而不是每条输入都单独调用一次，这样能减少网络请求次数，效率更高。
+
+- **HTTP 429 (rate limited) + retry with backoff** — a status code meaning "you're sending requests too fast"; the standard fix is to pause briefly and try again, rather than treating it as a real failure.
+  > 中文：HTTP 429 表示"请求发送得太快了"；标准做法是暂停一小段时间后重试，而不是把它当成真正的错误直接放弃。
+
+- **Caching by content presence (`"embedding" in chunks[0]`)** — checking whether the expected field already exists on the data, rather than tracking a separate "is this done" flag, is a simple way to make a step skippable if it already ran.
+  > 中文：通过检查数据里是否已经有某个字段（比如 `"embedding" in chunks[0]`），而不是单独维护一个"是否完成"的标记，是判断某一步是否已经跑过、可以跳过的简单方法。
+
+## Step 4: Retrieval
+
+### How this step works
+
+**`retrieve.py` -> `retrieve(question, tickers=("GOOGL", "MU"), top_k=5)`**
+1. Load all the embedded chunks (from step 3) for every ticker in `tickers`, into one combined list.
+   > 中文：把 `tickers` 里每个股票代码在第三步生成的所有带向量的分块，合并成一个列表。
+2. Stack every chunk's embedding vector into one big matrix, so all the similarity math can be done in a single vectorized operation.
+   > 中文：把每个分块的向量堆叠成一个大矩阵，这样后面的相似度计算可以一次性对所有分块做，而不用写循环。
+3. Embed the user's question with the same embedding function used for the chunks, so both are in the same vector space.
+   > 中文：用和分块一样的 embedding 函数，把用户的问题也转换成向量，这样两边的向量才能放在一起比较。
+4. Compute the cosine similarity between the question's vector and every chunk's vector at once.
+   > 中文：一次性计算问题向量和每一个分块向量之间的余弦相似度。
+5. Sort the chunks by similarity score, highest first, and keep only the top `top_k`.
+   > 中文：按相似度分数从高到低给分块排序，只保留最靠前的 `top_k` 个。
+6. Return those top chunks (ticker, year, text) along with their similarity score.
+   > 中文：返回这些排名最高的分块（包含股票代码、年份、文字），以及各自的相似度分数。
+
+### Terms
+
+- **Cosine similarity** — a way to measure how similar two vectors are, based on the angle between them (not their length); a score of 1 means identical direction (very similar meaning), 0 means unrelated. It's computed as the dot product of the two vectors divided by the product of their lengths (norms).
+  > 中文：余弦相似度用来衡量两个向量有多相似，看的是它们之间的夹角（而不是长度）。分数为 1 表示方向完全一致（意思非常接近），0 表示没什么关系。计算方式是两个向量的点积，除以它们各自长度（范数）的乘积。
+
+- **Vectorized operation (numpy)** — doing a calculation on an entire array/matrix at once (e.g. `chunk_vectors @ question_vector`) instead of looping over each element in Python; numpy runs this in fast, compiled code under the hood, which is much quicker than a manual loop.
+  > 中文：向量化操作指的是用 numpy 一次性对整个数组/矩阵做运算（比如 `chunk_vectors @ question_vector`），而不是在 Python 里写循环逐个处理。numpy 底层用编译好的代码执行，速度比手写循环快得多。
+
+- **`np.linalg.norm`** — computes the length (magnitude) of a vector; used here to normalize the dot product into a proper cosine similarity score.
+  > 中文：`np.linalg.norm` 用来计算一个向量的长度（模）。这里用它把点积结果归一化，转换成真正的余弦相似度分数。
+
+- **`np.argsort`** — returns the indices that would sort an array, rather than the sorted values themselves; combined with `[::-1]` (reverse) and slicing `[:top_k]`, it gives the indices of the highest-scoring chunks.
+  > 中文：`np.argsort` 返回的是"排序后各元素原来所在的位置下标"，而不是排序后的数值本身。配合 `[::-1]`（反转顺序）和切片 `[:top_k]`，就能拿到分数最高的几个分块对应的下标。
