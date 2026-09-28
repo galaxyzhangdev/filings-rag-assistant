@@ -45,7 +45,7 @@ def answer(question: str, top_k: int = 5) -> dict:
     }
 
 
-def print_answer_streaming(question: str, top_k: int = 5, delay: float = 0.04) -> None:
+def print_answer_streaming(question: str, top_k: int = 5, delay: float = 0.02) -> None:
     """Like answer(), but prints the response token-by-token as it streams in (CLI use only)."""
     chunks = retrieve(question, top_k=top_k)
     context = "\n\n".join(f"[{c['ticker']} {c['year']}]\n{c['text']}" for c in chunks)

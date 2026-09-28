@@ -1,7 +1,5 @@
-"""Retrieve the most relevant filing chunks for a question via cosine similarity search."""
-import numpy as np
-
-from embed import embed_texts, embed_ticker
+"""Retrieve the most relevant filing chunks for a question via Chroma vector search."""
+from embed import collection, embed_texts, embed_ticker
 
 DEFAULT_TICKERS = ("GOOGL", "MU")
 
@@ -29,29 +27,57 @@ DEFAULT_TICKERS = ("GOOGL", "MU")
 #     ]
 
 
+# Previous version: per-ticker top_k, but computed by hand with numpy against every chunk's embedding
+# loaded from the JSON cache. Kept here, commented out, for comparison -- see NOTES.md /
+# INTERVIEW_NOTES.md Step 4 "Before vs. after" for why this was upgraded to Chroma.
+#
+# def retrieve(question: str, tickers: tuple[str, ...] = DEFAULT_TICKERS, top_k: int = 5) -> list[dict]:
+#     """Embed the question and return the top_k most similar chunks (by cosine similarity) for each ticker."""
+#     question_vector = np.array(embed_texts([question])[0])
+#
+#     results = []
+#     for ticker in tickers:
+#         chunks = embed_ticker(ticker)
+#         chunk_vectors = np.array([c["embedding"] for c in chunks])
+#
+#         # Cosine similarity: dot product of each chunk vector with the question vector, divided by their norms.
+#         similarities = (chunk_vectors @ question_vector) / (
+#             np.linalg.norm(chunk_vectors, axis=1) * np.linalg.norm(question_vector)
+#         )
+#
+#         top_indices = np.argsort(similarities)[::-1][:top_k]
+#         results.extend(
+#             {"ticker": chunks[i]["ticker"], "year": chunks[i]["year"], "text": chunks[i]["text"], "score": float(similarities[i])}
+#             for i in top_indices
+#         )
+#
+#     return sorted(results, key=lambda r: r["score"], reverse=True)
+
+
 def retrieve(question: str, tickers: tuple[str, ...] = DEFAULT_TICKERS, top_k: int = 5) -> list[dict]:
-    """Embed the question and return the top_k most similar chunks (by cosine similarity) for each ticker.
+    """Embed the question and return the top_k most similar chunks (via Chroma) for each ticker.
 
     Retrieving per ticker (rather than one global top-k across all tickers combined) guarantees every
     ticker is represented in the context, which matters for cross-company questions: a single global
     top-k can otherwise end up dominated by whichever company's chunks happen to score higher.
     """
-    question_vector = np.array(embed_texts([question])[0])
+    for ticker in tickers:
+        embed_ticker(ticker)  # ensure this ticker's chunks are embedded and stored in Chroma
+
+    question_vector = embed_texts([question])[0]
 
     results = []
     for ticker in tickers:
-        chunks = embed_ticker(ticker)
-        chunk_vectors = np.array([c["embedding"] for c in chunks])
-
-        # Cosine similarity: dot product of each chunk vector with the question vector, divided by their norms.
-        similarities = (chunk_vectors @ question_vector) / (
-            np.linalg.norm(chunk_vectors, axis=1) * np.linalg.norm(question_vector)
+        hits = collection.query(
+            query_embeddings=[question_vector],
+            n_results=top_k,
+            where={"ticker": ticker.upper()},
         )
-
-        top_indices = np.argsort(similarities)[::-1][:top_k]
+        # Chroma's collection space is cosine distance (1 - cosine similarity); flip it back to a score
+        # so a higher number still means "more similar", matching the old cosine-similarity convention.
         results.extend(
-            {"ticker": chunks[i]["ticker"], "year": chunks[i]["year"], "text": chunks[i]["text"], "score": float(similarities[i])}
-            for i in top_indices
+            {"ticker": meta["ticker"], "year": meta["year"], "text": doc, "score": 1 - distance}
+            for doc, meta, distance in zip(hits["documents"][0], hits["metadatas"][0], hits["distances"][0])
         )
 
     return sorted(results, key=lambda r: r["score"], reverse=True)

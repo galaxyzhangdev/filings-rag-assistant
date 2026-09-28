@@ -1,8 +1,9 @@
-"""Self-check: embedding batching and cache-skip logic, with mocked HTTP (no real API calls/cost)."""
-import json
+"""Self-check: embedding batching and Chroma cache-skip logic, with mocked HTTP (no real API calls/cost)."""
 from unittest.mock import patch
 
-from embed import DATA_DIR, embed_texts, embed_ticker
+from embed import collection, embed_texts, embed_ticker
+
+DIM = 1536  # must match the collection's real embedding dimension (text-embedding-3-small)
 
 
 class FakeResponse:
@@ -27,14 +28,20 @@ with patch("embed.requests.post", side_effect=fake_post) as mock_post:
     assert len(embeddings) == 250
     assert mock_post.call_count == 3  # 250 texts / batch size 100 -> 3 calls
 
-# A ticker whose cached chunks already have embeddings should skip re-embedding entirely.
-DATA_DIR.mkdir(exist_ok=True)
-test_cache = DATA_DIR / "TEST_chunks.json"
-test_cache.write_text(json.dumps([{"ticker": "TEST", "year": "2024", "text": "x", "embedding": [1.0]}]))
-with patch("embed.requests.post") as mock_post:
-    chunks = embed_ticker("TEST")
-    assert mock_post.call_count == 0
-    assert chunks[0]["embedding"] == [1.0]
-test_cache.unlink()
+# A ticker not yet in the Chroma collection should be embedded and stored there.
+fake_chunks = [{"ticker": "TEST", "year": "2024", "text": "hello world"}]
+with patch("embed.ingest_ticker", return_value=fake_chunks), \
+     patch("embed.embed_texts", return_value=[[1.0] + [0.0] * (DIM - 1)]) as mock_embed:
+    embed_ticker("TEST")
+    assert mock_embed.call_count == 1
+    stored = collection.get(where={"ticker": "TEST"})
+    assert stored["documents"] == ["hello world"]
+
+# A ticker whose chunks are already in Chroma should skip re-embedding entirely.
+with patch("embed.embed_texts") as mock_embed:
+    embed_ticker("TEST")
+    assert mock_embed.call_count == 0
+
+collection.delete(where={"ticker": "TEST"})
 
 print("ok")

@@ -1,15 +1,20 @@
-"""Embed chunked filing text using OpenAI's text-embedding-3-small, cached alongside the chunks."""
-import json
+"""Embed chunked filing text using OpenAI's text-embedding-3-small, stored in a local Chroma collection."""
 import os
 import time
 from pathlib import Path
 
+import chromadb
 import requests
 
-from ingest import DATA_DIR, ingest_ticker
+from ingest import ingest_ticker
 
 BATCH_SIZE = 100
 MAX_RETRIES = 5
+
+# Chroma: local embedded vector database, persisted to disk under data/chroma, no server to run.
+# "hnsw:space": "cosine" makes query distances directly comparable to the old cosine-similarity scores.
+_client = chromadb.PersistentClient(path="data/chroma")
+collection = _client.get_or_create_collection("filing_chunks", metadata={"hnsw:space": "cosine"})
 
 
 def _load_env():
@@ -48,22 +53,43 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
     return embeddings
 
 
-def embed_ticker(ticker: str) -> list[dict]:
-    """Return a ticker's chunks with embeddings added, embedding and caching them only if not already done."""
+# Previous version: embeddings stored back into the ticker's chunk JSON file (a local .json cache),
+# checked via an "embedding" field on the first chunk. Kept here, commented out, for comparison -- see
+# NOTES.md / INTERVIEW_NOTES.md Step 3 for why this was upgraded to Chroma.
+#
+# def embed_ticker(ticker: str) -> list[dict]:
+#     """Return a ticker's chunks with embeddings added, embedding and caching them only if not already done."""
+#     chunks = ingest_ticker(ticker)
+#     if chunks and "embedding" in chunks[0]:
+#         return chunks
+#
+#     embeddings = embed_texts([c["text"] for c in chunks])
+#     for chunk, embedding in zip(chunks, embeddings):
+#         chunk["embedding"] = embedding
+#
+#     cache_path = DATA_DIR / f"{ticker.upper()}_chunks.json"
+#     cache_path.write_text(json.dumps(chunks))
+#     return chunks
+
+
+def embed_ticker(ticker: str) -> None:
+    """Embed a ticker's chunks and store them in the Chroma collection, skipping if already stored."""
+    ticker = ticker.upper()
+    if collection.get(where={"ticker": ticker}, limit=1)["ids"]:
+        return
+
     chunks = ingest_ticker(ticker)
-    if chunks and "embedding" in chunks[0]:
-        return chunks
-
     embeddings = embed_texts([c["text"] for c in chunks])
-    for chunk, embedding in zip(chunks, embeddings):
-        chunk["embedding"] = embedding
-
-    cache_path = DATA_DIR / f"{ticker.upper()}_chunks.json"
-    cache_path.write_text(json.dumps(chunks))
-    return chunks
+    collection.add(
+        ids=[f"{ticker}_{i}" for i in range(len(chunks))],
+        embeddings=embeddings,
+        documents=[c["text"] for c in chunks],
+        metadatas=[{"ticker": ticker, "year": c["year"]} for c in chunks],
+    )
 
 
 if __name__ == "__main__":
     for ticker in ("GOOGL", "MU"):
-        chunks = embed_ticker(ticker)
-        print(f"{ticker}: {len(chunks)} chunks embedded, dim={len(chunks[0]['embedding'])}")
+        embed_ticker(ticker)
+        stored = collection.get(where={"ticker": ticker})
+        print(f"{ticker}: {len(stored['ids'])} chunks embedded")

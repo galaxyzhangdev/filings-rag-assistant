@@ -108,14 +108,14 @@
    > 中文：所有批次都处理完后，按照输入文字的原始顺序，返回完整的向量列表。
 
 **`embed.py` -> `embed_ticker(ticker)`**
-1. Get the ticker's chunks by calling `ingest_ticker(ticker)` (from step 2), which itself returns cached chunks if they already exist.
-   > 中文：调用第二步写的 `ingest_ticker(ticker)` 获取该股票代码的分块（如果已经缓存过，会直接拿到缓存结果）。
-2. Check whether the first chunk already has an `embedding` field; if so, everything is already embedded, so return the chunks as-is with no API calls.
-   > 中文：检查第一个分块里是否已经有 `embedding` 字段；如果有，说明已经全部生成过向量，直接返回，不再调用 API。
-3. Otherwise, call `embed_texts` on every chunk's text and attach the resulting vector to each chunk as its `embedding` field.
-   > 中文：如果还没有，就对所有分块的文字调用 `embed_texts`，并把生成的向量作为 `embedding` 字段加到每个分块上。
-4. Save the updated chunks (now including embeddings) back to the same cache file used in step 2, then return them.
-   > 中文：把带有向量的分块重新保存到第二步用的那个缓存文件里，然后返回这些分块。
+1. Normalize the ticker to uppercase, then check the Chroma collection for any chunk already tagged with that ticker in its metadata.
+   > 中文：把股票代码转成大写，然后在 Chroma 集合里查一下有没有分块的元数据已经标记了这个股票代码。
+2. If a match is found, everything for this ticker is already embedded and stored, so return immediately with no API calls.
+   > 中文：如果查到了匹配的记录，说明这个股票代码已经生成过向量并存好了，直接返回，不再调用任何 API。
+3. Otherwise, get the ticker's chunks by calling `ingest_ticker(ticker)` (from step 2), then call `embed_texts` on every chunk's text to get their vectors.
+   > 中文：如果没查到，就调用第二步写的 `ingest_ticker(ticker)` 获取该股票代码的分块，再对所有分块的文字调用 `embed_texts` 生成向量。
+4. Add all chunks to the Chroma collection in one call: each chunk's vector, its text, and its metadata (ticker, year), each tagged with a unique id.
+   > 中文：把所有分块一次性写入 Chroma 集合：包括每个分块的向量、原文和元数据（股票代码、年份），并给每条记录配一个唯一 id。
 
 ### Terms
 
@@ -128,23 +128,34 @@
 - **HTTP 429 (rate limited) + retry with backoff** — a status code meaning "you're sending requests too fast"; the standard fix is to pause briefly and try again, rather than treating it as a real failure.
   > 中文：HTTP 429 表示"请求发送得太快了"；标准做法是暂停一小段时间后重试，而不是把它当成真正的错误直接放弃。
 
-- **Caching by content presence (`"embedding" in chunks[0]`)** — checking whether the expected field already exists on the data, rather than tracking a separate "is this done" flag, is a simple way to make a step skippable if it already ran.
-  > 中文：通过检查数据里是否已经有某个字段（比如 `"embedding" in chunks[0]`），而不是单独维护一个"是否完成"的标记，是判断某一步是否已经跑过、可以跳过的简单方法。
+- **Caching by content presence (`collection.get(where=..., limit=1)`)** — checking whether any record already exists for a ticker, rather than tracking a separate "is this done" flag, is a simple way to make a step skippable if it already ran; this replaced an earlier version that checked for an `"embedding"` field on the cached chunk data instead (see Step 4's "Revision" below for why the storage moved to Chroma).
+  > 中文：通过查一下 Chroma 里是否已经有某个股票代码的记录（`collection.get(where=..., limit=1)`），而不是单独维护一个"是否完成"的标记，是判断某一步是否已经跑过、可以跳过的简单方法；这取代了之前"检查分块数据里有没有 `embedding` 字段"的做法（原因见第 4 步下面的"修订"部分）。
+
+- **Chroma / vector database** — a database purpose-built for storing embedding vectors and searching them by similarity, instead of a plain file; `chromadb.PersistentClient(path=...)` runs it embedded in the same process (no separate server) and persists everything to disk under that path.
+  > 中文：Chroma 是一个专门用来存储向量（embedding）并按相似度搜索的数据库，而不是普通的文件。`chromadb.PersistentClient(path=...)` 让它直接嵌入在当前程序里运行（不需要单独启动服务器），并把所有数据持久化保存到指定路径下。
+
+- **Collection** — a named table-like grouping inside Chroma that holds vectors, their original text (`documents`), and arbitrary metadata (like `ticker`, `year`) side by side; `get_or_create_collection` opens it if it exists or creates it on first use.
+  > 中文：collection（集合）是 Chroma 里类似"表"的概念，把向量、原文（`documents`）和自定义元数据（比如 `ticker`、`year`）存放在一起。`get_or_create_collection` 会在集合已存在时打开它，不存在时自动创建。
+
+- **Metadata filtering (`where={"ticker": ...}`)** — Chroma lets a query or a `get`/`delete` call be restricted to only the records whose metadata matches a filter, which is what makes "only this ticker's chunks" possible without loading everything and filtering by hand in Python.
+  > 中文：`where={"ticker": ...}` 是 Chroma 提供的元数据筛选功能，可以让查询、`get`、`delete` 只作用于元数据匹配条件的那些记录，这样就能直接拿到"某个股票代码自己的分块"，不需要把所有数据加载出来再用 Python 手动筛选。
 
 ## Step 4: Retrieval
 
 ### How this step works
 
 **`retrieve.py` -> `retrieve(question, tickers=("GOOGL", "MU"), top_k=5)`**
-1. Embed the user's question once, with the same embedding function used for the chunks, so both are in the same vector space.
-   > 中文：先把用户的问题转换成向量（用和分块一样的 embedding 函数），这样问题向量和分块向量才能放在一起比较。
-2. For each ticker separately: load that ticker's embedded chunks (from step 3), stack their vectors into a matrix, and compute cosine similarity against the question vector.
-   > 中文：对每一个股票代码单独处理：加载该代码在第三步生成的所有带向量的分块，把向量堆叠成矩阵，计算和问题向量的余弦相似度。
-3. Within that one ticker, sort its chunks by similarity score and keep only its own top `top_k`.
-   > 中文：在这一个股票代码内部，按相似度给分块排序，只保留这个股票代码自己的前 `top_k` 个。
-4. Repeat for every ticker, so each one contributes its own top `top_k` chunks — this guarantees every ticker is represented, instead of one global ranking where a lower-scoring ticker could be crowded out entirely.
-   > 中文：对每个股票代码都重复这个过程，这样每个股票代码都能贡献自己的 top `top_k` 个分块——这样能保证每个股票代码都有代表性，而不是用一个全局排名，让分数普遍较低的那个股票代码被完全挤掉。
-5. Merge all tickers' chunks into one list, sort the merged list by score (highest first), and return it (ticker, year, text, score).
+1. For each ticker, call `embed_ticker(ticker)` (from step 3) first, so its chunks are guaranteed to already be embedded and stored in Chroma before querying.
+   > 中文：对每个股票代码，先调用第三步写的 `embed_ticker(ticker)`，确保在查询之前，它的分块已经生成向量并存进了 Chroma。
+2. Embed the user's question once, with the same embedding function used for the chunks, so both are in the same vector space.
+   > 中文：把用户的问题转换成向量（用和分块一样的 embedding 函数），这样问题向量和分块向量才能放在一起比较。
+3. For each ticker separately: query the Chroma collection for the top `top_k` chunks whose metadata ticker matches, using the question vector for similarity search.
+   > 中文：对每一个股票代码单独处理：用问题向量去查询 Chroma 集合，只在该股票代码对应的分块里取相似度最高的 top `top_k` 个。
+4. Convert each result's distance back into a similarity-style score (`1 - distance`), so a higher number still means "more similar", matching the old convention.
+   > 中文：把每条结果的 distance（距离）转换回类似相似度的分数（`1 - distance`），这样分数越高仍然代表越相似，和之前的写法保持一致。
+5. Repeat for every ticker, so each one contributes its own top `top_k` chunks — this still guarantees every ticker is represented, instead of one global ranking where a lower-scoring ticker could be crowded out entirely.
+   > 中文：对每个股票代码都重复这个过程，这样每个股票代码都能贡献自己的 top `top_k` 个分块——依然能保证每个股票代码都有代表性，而不是用一个全局排名，让分数普遍较低的那个股票代码被完全挤掉。
+6. Merge all tickers' chunks into one list, sort the merged list by score (highest first), and return it (ticker, year, text, score).
    > 中文：把所有股票代码的分块合并成一个列表，按分数从高到低排序后返回（包含股票代码、年份、文字、分数）。
 
 ### Revision: before vs. after (the cross-company retrieval fix)
@@ -163,6 +174,23 @@ The original version of `retrieve()` is kept, commented out, at the top of `retr
 - **Result**: every ticker is now guaranteed to contribute up to `top_k` chunks, regardless of how its scores compare to another ticker's. Re-running the evaluation confirmed all 3 cross-company questions now retrieve and use both companies' data correctly.
   > 中文：这样一来，无论某个股票代码整体分数高低，都能保证它贡献最多 `top_k` 个分块。重新跑评测后确认：3 道跨公司问题现在都能正确取到并使用两家公司的数据了。
 
+### Revision: before vs. after (numpy/JSON → Chroma)
+
+The numpy/cosine-similarity version — both storing embeddings in each ticker's chunk JSON file and computing
+similarity by hand — is kept, commented out, in `embed.py` and `retrieve.py` for comparison.
+
+- **Before**: `embed_ticker` wrote each chunk's vector back into that ticker's chunk JSON cache file (the same file used for step 2's text chunks), checked by looking for an `"embedding"` field on the first chunk. `retrieve` then loaded that whole file per ticker, stacked every chunk's vector into a numpy array, and computed cosine similarity by hand against the question vector.
+  > 中文：旧版本里，`embed_ticker` 把每个分块的向量直接写回该股票代码的分块 JSON 缓存文件（和第二步存文字分块用的是同一个文件），并通过检查第一个分块有没有 `"embedding"` 字段来判断是否已经处理过。`retrieve` 检索时要把整个文件加载进来，把所有分块的向量堆叠成一个 numpy 数组，再手动计算和问题向量的余弦相似度。
+
+- **Why upgrade**: a flat JSON file has no built-in indexing or metadata filtering — it works fine at a few hundred chunks, but every single query still means loading the whole file and comparing against every vector by hand in Python. A vector database like Chroma is the kind of infrastructure real production RAG systems actually run on: it persists embeddings to disk itself, indexes them for similarity search, and supports metadata filtering (`where={"ticker": ...}`) natively — so the per-ticker retrieval no longer needs to be hand-rolled with numpy, and there's real room to grow past a few hundred chunks without rewriting retrieval again.
+  > 中文：普通的 JSON 文件没有内置索引，也没办法按元数据筛选——在只有几百个分块的规模下能用，但每次查询仍然要把整个文件加载出来，在 Python 里逐个手动比较。Chroma 这样的向量数据库才是真实生产环境里 RAG 系统会用的基础设施：它自己把向量持久化到磁盘、为相似度搜索建好索引，并且原生支持按元数据筛选（`where={"ticker": ...}`）——这样按股票代码分别检索的逻辑就不用再靠 numpy 手写了，而且未来分块数量远超几百个也不需要重写检索逻辑。
+
+- **After**: `embed_ticker` now writes each chunk's vector, text, and metadata into a Chroma collection persisted under `data/chroma`, checked for an existing ticker via `collection.get(where=...)` instead of an `"embedding"` field. `retrieve` queries that same collection per ticker (`collection.query(..., where={"ticker": ticker})`) instead of loading and comparing vectors by hand.
+  > 中文：现在 `embed_ticker` 把每个分块的向量、原文和元数据写进一个持久化在 `data/chroma` 目录下的 Chroma 集合，并通过 `collection.get(where=...)` 检查该股票代码是否已经存在，而不是看 `"embedding"` 字段。`retrieve` 则对同一个集合按股票代码分别查询（`collection.query(..., where={"ticker": ticker})`），不再需要手动加载和比较向量。
+
+- **Result**: re-ran the full evaluation after switching to Chroma. All 3 cross-company questions still correctly retrieve and use both companies' data, and the RAG triad scores stayed consistent with the numpy version: groundedness 1.00 → 1.00, answer relevance 1.00 → 1.00, context relevance 0.78 → 0.83 (a small, expected fluctuation from the LLM judge, not a retrieval change — the underlying cosine-similarity math and per-ticker guarantee are identical, just computed by Chroma's index instead of by hand). Confirms the swap changed the storage/query mechanism without hurting retrieval quality.
+  > 中文：切换到 Chroma 之后重新跑了一次完整评测。3 道跨公司问题依然能正确取到并使用两家公司的数据，RAG triad 的分数也和 numpy 版本基本一致：忠实度 1.00 → 1.00，答案相关性 1.00 → 1.00，上下文相关性 0.78 → 0.83（这只是 LLM 评委带来的小幅波动，不是检索本身变了——底层的余弦相似度计算和"每个股票代码都有保证"这两点完全没变，只是换成由 Chroma 的索引来计算，而不是手写代码算）。确认这次改动只是换了存储和查询方式，没有影响检索质量。
+
 ### Terms
 
 - **Cosine similarity** — a way to measure how similar two vectors are, based on the angle between them (not their length); a score of 1 means identical direction (very similar meaning), 0 means unrelated. It's computed as the dot product of the two vectors divided by the product of their lengths (norms).
@@ -174,8 +202,11 @@ The original version of `retrieve()` is kept, commented out, at the top of `retr
 - **`np.linalg.norm`** — computes the length (magnitude) of a vector; used here to normalize the dot product into a proper cosine similarity score.
   > 中文：`np.linalg.norm` 用来计算一个向量的长度（模）。这里用它把点积结果归一化，转换成真正的余弦相似度分数。
 
-- **`np.argsort`** — returns the indices that would sort an array, rather than the sorted values themselves; combined with `[::-1]` (reverse) and slicing `[:top_k]`, it gives the indices of the highest-scoring chunks.
-  > 中文：`np.argsort` 返回的是"排序后各元素原来所在的位置下标"，而不是排序后的数值本身。配合 `[::-1]`（反转顺序）和切片 `[:top_k]`，就能拿到分数最高的几个分块对应的下标。
+- **`np.argsort`** — returns the indices that would sort an array, rather than the sorted values themselves; combined with `[::-1]` (reverse) and slicing `[:top_k]`, it gives the indices of the highest-scoring chunks. (This was used by the old numpy version, kept commented out for comparison; the current version lets Chroma's own index do the ranking instead.)
+  > 中文：`np.argsort` 返回的是"排序后各元素原来所在的位置下标"，而不是排序后的数值本身。配合 `[::-1]`（反转顺序）和切片 `[:top_k]`，就能拿到分数最高的几个分块对应的下标。（这是旧版 numpy 实现用的写法，保留在注释里做对比；现在的版本改成直接让 Chroma 自己的索引来排序。）
+
+- **Cosine distance vs. cosine similarity (`score = 1 - distance`)** — Chroma's `query()` returns a *distance* (smaller = more similar), not a similarity score; with the collection configured for cosine space, that distance equals `1 - cosine_similarity`, so subtracting it from 1 converts it back into the same "higher = more similar" score used everywhere else in this project.
+  > 中文：Chroma 的 `query()` 返回的是"距离"（distance，数值越小越相似），不是相似度分数；因为集合设置成了余弦空间，这个距离正好等于 `1 - 余弦相似度`，所以用 1 减去它，就能换算回项目里其它地方统一用的"分数越高越相似"的写法。
 
 ## Step 5: Generation
 

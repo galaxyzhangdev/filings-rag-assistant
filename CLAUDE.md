@@ -38,11 +38,11 @@ out of scope for now" section unless asked.
    - Cache by ticker: if a company's filings are already downloaded and
      chunked, don't re-fetch or re-process them.
 3. **Embedding**: embed each chunk using OpenAI's `text-embedding-3-small`
-   (same `OPENAI_API_KEY` used for chat). Store embeddings alongside the
-   chunks (local `.json`/`.npy` file — no vector database).
-4. **Retrieval**: vector search only — embed the question, compute cosine
-   similarity against all stored chunk embeddings via `numpy`, take the
-   top-k highest-scoring chunks. No BM25, no hybrid retrieval for now.
+   (same `OPENAI_API_KEY` used for chat). Store embeddings in **Chroma**, a
+   local embedded vector database (no server), persisted to disk.
+4. **Retrieval**: vector search only — embed the question, query Chroma for
+   the top-k most similar chunks per ticker, and merge results across
+   tickers. No BM25, no hybrid retrieval for now.
 5. **Generation**: take the user's question, retrieve top-k chunks, stuff
    them into a prompt, call OpenAI's `gpt-4.1-mini` for the answer.
 6. **Evaluation** (on Alphabet + Micron only):
@@ -81,7 +81,8 @@ under control:
 - LLM + embeddings via OpenAI API (`OPENAI_API_KEY` env var):
   - Chat: `gpt-4.1-mini`
   - Embeddings: `text-embedding-3-small`
-- Retrieval: `numpy` (cosine similarity) only, no vector database.
+- Retrieval: `chromadb` (local embedded vector database, persisted to
+  disk, no server).
 - Evaluation: Arize Phoenix.
 
 ## Code style
