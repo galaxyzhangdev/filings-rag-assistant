@@ -30,4 +30,8 @@ def answer(question: str, top_k: int = 5) -> str:
 
 
 if __name__ == "__main__":
-    print(answer("What was Micron's revenue in fiscal 2025?"))
+    while True:
+        question = input("Question: ")
+        if question.strip().lower() in ("exit", "quit"):
+            break
+        print(f"\nAnswer: {answer(question)}\n")
