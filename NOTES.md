@@ -162,3 +162,30 @@
 
 - **`np.argsort`** — returns the indices that would sort an array, rather than the sorted values themselves; combined with `[::-1]` (reverse) and slicing `[:top_k]`, it gives the indices of the highest-scoring chunks.
   > 中文：`np.argsort` 返回的是"排序后各元素原来所在的位置下标"，而不是排序后的数值本身。配合 `[::-1]`（反转顺序）和切片 `[:top_k]`，就能拿到分数最高的几个分块对应的下标。
+
+## Step 5: Generation
+
+### How this step works
+
+**`generate.py` -> `answer(question, top_k=5)`**
+1. Call `retrieve(question, top_k=top_k)` (from step 4) to get the most relevant filing chunks.
+   > 中文：调用第四步写的 `retrieve(question, top_k=top_k)`，获取最相关的那些分块。
+2. Join those chunks into one text block, each one labeled with its ticker and filing year.
+   > 中文：把这些分块拼接成一段文字，每个分块前面标注上对应的股票代码和年份。
+3. Build a chat message list: a system instruction telling the model to answer only from the excerpts (and say "I don't know" otherwise), plus a user message containing the excerpts and the question.
+   > 中文：组装一个对话消息列表：一条系统指令，要求模型只根据这些摘录回答问题（否则就说"不知道"），再加一条用户消息，里面包含摘录内容和问题本身。
+4. Send those messages to OpenAI's chat completions API using the `gpt-4.1-mini` model.
+   > 中文：把这些消息发送给 OpenAI 的 chat completions 接口，使用 `gpt-4.1-mini` 模型。
+5. Pull the model's reply text out of the response and return it.
+   > 中文：从返回结果中取出模型回复的文字内容，返回给调用者。
+
+### Terms
+
+- **Prompt stuffing** — putting retrieved context text directly into the prompt sent to the LLM, so it can "read" that information before answering; this is the core mechanic of RAG (retrieval-augmented generation).
+  > 中文：prompt stuffing（提示词填充）指的是把检索到的内容直接放进发给大模型的提示词里，让模型在回答之前先"读到"这些信息。这正是 RAG（检索增强生成）的核心机制。
+
+- **System vs. user message** — chat models take a list of role-tagged messages; a "system" message sets behavior/rules for the whole conversation, while a "user" message is the actual input/question. Separating them keeps instructions (don't guess, use only the context) distinct from the content being asked about.
+  > 中文：对话模型接收的是一系列带角色标签的消息；"system"（系统）消息用来设定整段对话的行为规则，"user"（用户）消息则是具体的输入/问题。把两者分开，能让"不要瞎猜、只用给定内容回答"这类规则和实际问题内容区分清楚。
+
+- **Grounding / abstention instruction** — explicitly telling the model to answer only from provided context and to say "I don't know" when the answer isn't there, instead of relying on its own general knowledge — this reduces hallucination and is what a should-abstain eval question later checks for.
+  > 中文：grounding（依据信息作答）/ 拒答指令，是明确告诉模型"只能根据提供的内容回答，如果里面没有答案就说不知道"，而不是依赖模型自己的通用知识瞎猜——这样能减少"幻觉"，也是之后评测里"应该拒答"的问题要检验的能力。
