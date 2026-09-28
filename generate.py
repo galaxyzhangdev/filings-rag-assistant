@@ -1,4 +1,6 @@
 """Generate an answer to a question using retrieved filing chunks as context."""
+import time
+
 import requests
 
 from embed import OPENAI_HEADERS
@@ -11,8 +13,12 @@ SYSTEM_PROMPT = (
 )
 
 
-def answer(question: str, top_k: int = 5) -> str:
-    """Retrieve relevant filing chunks, stuff them into a prompt, and call gpt-4.1-mini for an answer."""
+def answer(question: str, top_k: int = 5) -> dict:
+    """Retrieve relevant filing chunks, stuff them into a prompt, and call gpt-4.1-mini for an answer.
+
+    Returns the answer text along with the retrieved context, token usage, and latency,
+    so callers (e.g. evaluation) can score and log the full round trip.
+    """
     chunks = retrieve(question, top_k=top_k)
     context = "\n\n".join(f"[{c['ticker']} {c['year']}]\n{c['text']}" for c in chunks)
 
@@ -20,13 +26,22 @@ def answer(question: str, top_k: int = 5) -> str:
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": f"Excerpts:\n{context}\n\nQuestion: {question}"},
     ]
+    start = time.monotonic()
     resp = requests.post(
         "https://api.openai.com/v1/chat/completions",
         headers=OPENAI_HEADERS,
         json={"model": "gpt-4.1-mini", "messages": messages},
     )
+    latency = time.monotonic() - start
     resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
+    data = resp.json()
+
+    return {
+        "answer": data["choices"][0]["message"]["content"],
+        "context": context,
+        "usage": data["usage"],
+        "latency": latency,
+    }
 
 
 if __name__ == "__main__":
@@ -34,4 +49,4 @@ if __name__ == "__main__":
         question = input("Question: ")
         if question.strip().lower() in ("exit", "quit"):
             break
-        print(f"\nAnswer: {answer(question)}\n")
+        print(f"\nAnswer: {answer(question)['answer']}\n")

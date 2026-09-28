@@ -189,3 +189,44 @@
 
 - **Grounding / abstention instruction** — explicitly telling the model to answer only from provided context and to say "I don't know" when the answer isn't there, instead of relying on its own general knowledge — this reduces hallucination and is what a should-abstain eval question later checks for.
   > 中文：grounding（依据信息作答）/ 拒答指令，是明确告诉模型"只能根据提供的内容回答，如果里面没有答案就说不知道"，而不是依赖模型自己的通用知识瞎猜——这样能减少"幻觉"，也是之后评测里"应该拒答"的问题要检验的能力。
+
+## Step 6: Evaluation
+
+### How this step works
+
+**`eval.py` -> `get_cached_answer(question, cache)`**
+1. Build a cache key from the retrieval method and the question.
+   > 中文：用检索方法的名字加上问题本身，拼出一个缓存的键（key）。
+2. If that key isn't in the cache yet, call `answer(question)` (from step 5) and store the result under that key, saving the cache to disk right away.
+   > 中文：如果这个键还没有出现在缓存里，就调用第五步写的 `answer(question)` 生成答案，并把结果存进缓存，同时立刻写入磁盘保存。
+3. Return whatever is now stored under that key — either the freshly generated result, or the one that was already cached.
+   > 中文：返回这个键目前对应的结果——不管是刚刚生成的，还是之前就已经缓存好的。
+
+**`eval.py` -> `run_eval()`**
+1. Load the on-disk answer cache and set up the three RAG-triad evaluators (context relevance, groundedness, answer relevance) backed by `gpt-4.1-mini` as the judge model.
+   > 中文：读取磁盘上的答案缓存，并准备好三个 RAG triad 评估器（上下文相关性、忠实度、答案相关性），它们都用 `gpt-4.1-mini` 作为"评委"模型。
+2. For each question in the hand-written eval set, get its answer via `get_cached_answer` (generating it only if not already cached).
+   > 中文：对于手写评测集里的每一个问题，通过 `get_cached_answer` 获取答案（只有没缓存过才会真的调用模型生成）。
+3. Run all three evaluators on the (question, answer, retrieved context) triple, producing a relevance/faithfulness label and score for each.
+   > 中文：对（问题、答案、检索到的上下文）这一组数据，跑三个评估器，得到每一项的标签（比如"相关"或"不相关"）和分数。
+4. Print the question, its answer, the three scores, and the token usage/latency for that question.
+   > 中文：打印出问题、答案、三个评分结果，以及这道题消耗的 token 数量和用时。
+5. Collect all per-question results into a list and return it, for the final summary to aggregate.
+   > 中文：把每道题的结果收集成一个列表并返回，供最后的汇总统计使用。
+
+### Terms
+
+- **RAG triad** — three reference-free metrics used to evaluate a RAG system without needing a hand-written "correct answer": context relevance (is the retrieved context relevant to the question?), groundedness/faithfulness (is the answer actually supported by that context?), and answer relevance (does the answer address the question asked?).
+  > 中文：RAG triad（RAG 三元组指标）是三个不需要人工写"标准答案"就能评估 RAG 系统的指标：上下文相关性（检索到的内容和问题相关吗？）、忠实度/依据性（答案是不是真的有上下文支持？）、答案相关性（答案有没有回应问题本身？）。
+
+- **LLM-as-judge** — using a language model to score another model's output (instead of a human or a fixed rule), by giving the judge model the question/answer/context and asking it to classify or rate the result.
+  > 中文：LLM-as-judge（用大模型当评委）指的是用一个语言模型去给另一个模型的输出打分（而不是靠人工或写死的规则），做法是把问题、答案、上下文都给这个"评委"模型，让它做分类或打分。
+
+- **Phoenix's `LLM` wrapper / `Evaluator` classes** — `arize-phoenix-evals` provides a small `LLM` wrapper around a real provider (here, OpenAI) plus prebuilt `Evaluator` classes (like `FaithfulnessEvaluator`, `RetrievalRelevanceEvaluator`) that already contain a tested judge prompt for a specific metric — so a metric doesn't need to be built from scratch.
+  > 中文：`arize-phoenix-evals` 提供了一个包装真实模型提供商（这里是 OpenAI）的 `LLM` 类，以及一些内置的 `Evaluator`（评估器）类（比如 `FaithfulnessEvaluator`、`RetrievalRelevanceEvaluator`），它们已经内置了针对特定指标、经过验证的评分提示词，不需要自己从零写。
+
+- **`create_classifier`** — a factory function for building a *custom* LLM-as-judge classifier when Phoenix doesn't ship a prebuilt evaluator for what's needed (here, "answer relevance"); you give it a name, a judge prompt template, and the possible labels/scores.
+  > 中文：`create_classifier` 是一个用来构建*自定义* LLM 评委分类器的工厂函数，用在 Phoenix 没有现成评估器的场景（这里是"答案相关性"）；只需要提供名字、评分用的提示词模板，以及可能的标签和分数。
+
+- **Caching LLM answers per (question, retrieval method)** — storing each generated answer keyed by both the question text and which retrieval method produced its context, so re-running the eval script (e.g. after changing an evaluator) doesn't re-spend money regenerating unchanged answers.
+  > 中文：按照"问题 + 检索方法"这个组合来缓存每次生成的答案，这样以后重新跑评测脚本（比如只是改了评分逻辑）时，不会为没有变化的问题重新花钱生成答案。
