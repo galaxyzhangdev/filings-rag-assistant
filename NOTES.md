@@ -136,18 +136,32 @@
 ### How this step works
 
 **`retrieve.py` -> `retrieve(question, tickers=("GOOGL", "MU"), top_k=5)`**
-1. Load all the embedded chunks (from step 3) for every ticker in `tickers`, into one combined list.
-   > 中文：把 `tickers` 里每个股票代码在第三步生成的所有带向量的分块，合并成一个列表。
-2. Stack every chunk's embedding vector into one big matrix, so all the similarity math can be done in a single vectorized operation.
-   > 中文：把每个分块的向量堆叠成一个大矩阵，这样后面的相似度计算可以一次性对所有分块做，而不用写循环。
-3. Embed the user's question with the same embedding function used for the chunks, so both are in the same vector space.
-   > 中文：用和分块一样的 embedding 函数，把用户的问题也转换成向量，这样两边的向量才能放在一起比较。
-4. Compute the cosine similarity between the question's vector and every chunk's vector at once.
-   > 中文：一次性计算问题向量和每一个分块向量之间的余弦相似度。
-5. Sort the chunks by similarity score, highest first, and keep only the top `top_k`.
-   > 中文：按相似度分数从高到低给分块排序，只保留最靠前的 `top_k` 个。
-6. Return those top chunks (ticker, year, text) along with their similarity score.
-   > 中文：返回这些排名最高的分块（包含股票代码、年份、文字），以及各自的相似度分数。
+1. Embed the user's question once, with the same embedding function used for the chunks, so both are in the same vector space.
+   > 中文：先把用户的问题转换成向量（用和分块一样的 embedding 函数），这样问题向量和分块向量才能放在一起比较。
+2. For each ticker separately: load that ticker's embedded chunks (from step 3), stack their vectors into a matrix, and compute cosine similarity against the question vector.
+   > 中文：对每一个股票代码单独处理：加载该代码在第三步生成的所有带向量的分块，把向量堆叠成矩阵，计算和问题向量的余弦相似度。
+3. Within that one ticker, sort its chunks by similarity score and keep only its own top `top_k`.
+   > 中文：在这一个股票代码内部，按相似度给分块排序，只保留这个股票代码自己的前 `top_k` 个。
+4. Repeat for every ticker, so each one contributes its own top `top_k` chunks — this guarantees every ticker is represented, instead of one global ranking where a lower-scoring ticker could be crowded out entirely.
+   > 中文：对每个股票代码都重复这个过程，这样每个股票代码都能贡献自己的 top `top_k` 个分块——这样能保证每个股票代码都有代表性，而不是用一个全局排名，让分数普遍较低的那个股票代码被完全挤掉。
+5. Merge all tickers' chunks into one list, sort the merged list by score (highest first), and return it (ticker, year, text, score).
+   > 中文：把所有股票代码的分块合并成一个列表，按分数从高到低排序后返回（包含股票代码、年份、文字、分数）。
+
+### Revision: before vs. after (the cross-company retrieval fix)
+
+The original version of `retrieve()` is kept, commented out, at the top of `retrieve.py` for comparison.
+
+- **Before**: combined every ticker's chunks into one pool, computed similarity for all of them against the question, and took a single global top `top_k` across that whole pool.
+  > 中文：旧版本把所有股票代码的分块合并成一个池子，统一计算每个分块和问题的相似度，然后从这个大池子里取一个全局的 top `top_k`。
+
+- **Problem this caused**: for a cross-company question, if one company's chunks happened to score higher overall, the global top `top_k` could end up filled entirely (or almost entirely) with that one company's chunks — the other company's data might never make it into the context at all, even though the question needed both. Confirmed in evaluation: all 3 cross-company eval questions failed this way.
+  > 中文：这样做的问题是：对于跨公司的问题，如果某一家公司的分块整体相似度更高，全局 top `top_k` 就可能几乎全被这一家公司的分块占满——另一家公司的数据可能完全进不了上下文，即使问题明明需要两家公司的数据。在评测中验证到：3 道跨公司问题全部因此失败。
+
+- **After**: compute similarity and take the top `top_k` separately *within* each ticker's own pool first, then merge all tickers' results together.
+  > 中文：新版本先在每个股票代码*各自的*分块池子里分别计算相似度、取各自的 top `top_k`，然后再把所有股票代码的结果合并起来。
+
+- **Result**: every ticker is now guaranteed to contribute up to `top_k` chunks, regardless of how its scores compare to another ticker's. Re-running the evaluation confirmed all 3 cross-company questions now retrieve and use both companies' data correctly.
+  > 中文：这样一来，无论某个股票代码整体分数高低，都能保证它贡献最多 `top_k` 个分块。重新跑评测后确认：3 道跨公司问题现在都能正确取到并使用两家公司的数据了。
 
 ### Terms
 
