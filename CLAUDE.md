@@ -103,3 +103,73 @@ because ingestion + evaluation can add up quickly:
   briefly explain what was built before moving to the next step.
 - Do not jump ahead to later steps or add out-of-scope features without
   asking first.
+
+## Learning notes (bilingual glossary + step flow)
+I'm new to these terms and libraries, so after finishing each step of the
+Scope list, append to a file called `NOTES.md` in the project root (create
+it if it doesn't exist) with an entry for that step. Each entry has TWO
+parts, in this order:
+
+1. **How this step works** — grouped by file and function, so I can find
+   the matching code while reading. For each function involved in this
+   step, add a `` **`file.py` -> `function_name(params)`** `` header,
+   followed by a short numbered list of what that function does, start
+   to finish (input -> ... -> output). This is about control flow/logic,
+   not term definitions. Each numbered item is bilingual: one
+   plain-English line, then an indented Chinese line under it. If a step
+   involves more than one function, add one header block per function,
+   in the order they're called.
+2. **Terms glossary** — the bilingual glossary of new terms/functions/
+   concepts introduced, same format as before.
+
+Format per entry:
+
+```
+## Step N: <short step name>
+
+### How this step works
+
+**`<file>.py` -> `<function_name>(<params>)`**
+1. <plain-English description of the first operation>
+   > 中文：<对应中文描述>
+2. <plain-English description of the next operation>
+   > 中文：<对应中文描述>
+...
+
+**`<file>.py` -> `<next_function_name>(<params>)`**  (only if a second function is involved)
+1. ...
+
+### Terms
+- **<English term>** — <one-line English explanation>
+  > 中文：<2-3 句中文解释，说明是什么、为什么这么做>
+```
+
+One glossary entry per new term or function worth knowing (not every
+single line of code — just the concepts/APIs/libraries that are new or
+non-obvious). Keep each explanation short and plain, no jargon left
+unexplained. This file is for me to study from, not part of the shipped
+project logic.
+
+## Interview notes
+After finishing each step (same time as the NOTES.md update), also append
+an entry to a separate file called `INTERVIEW_NOTES.md` in the project
+root (create it if it doesn't exist). This is prep material for talking
+about the project out loud in an interview — separate from NOTES.md,
+which is for learning the concepts. Format per entry:
+
+```
+## Step N: <short step name>
+
+**What I built**: 1-2 plain sentences, no jargon dump, describing what
+this step does.
+**Why this approach**: why this choice was made over alternatives —
+show judgment, not "the tutorial said so."
+**Trade-off / limitation**: current limitation of this approach, and
+what I'd improve with more time.
+**If they push**: one likely follow-up question an interviewer might
+ask about this step, plus a short answer.
+```
+
+Keep every field short (1-3 sentences max) and in plain spoken language —
+this should read like something I'd actually say out loud, not a written
+report.
