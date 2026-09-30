@@ -2,9 +2,8 @@
 
 A retrieval-augmented generation (RAG) question-answering system over SEC
 10-K filings, built as a personal portfolio project to demonstrate RAG
-pipeline design and evaluation practice (Data Engineer → AI Engineer
-transition). Not a work project — no employer data, no confidential
-information.
+pipeline design and evaluation practice. Not a work project — no employer
+data, no confidential information.
 
 Ask questions like *"Which company had higher revenue, Alphabet or
 Micron?"* and get an answer grounded in the actual filing text, with the
@@ -84,7 +83,7 @@ the current implementation in `retrieve.py`, for comparison. A second,
 independent revision later moved storage/query itself from a flat JSON
 file + hand-rolled numpy cosine similarity to Chroma; that revision is
 documented the same way (commented out above the current code) and in
-`NOTES.md` / `INTERVIEW_NOTES.md` (Step 4).
+`NOTES.md` (Step 4).
 
 ### RAG triad evaluation via Arize Phoenix
 
