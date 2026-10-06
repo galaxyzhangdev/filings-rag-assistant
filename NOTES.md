@@ -340,6 +340,11 @@ similarity by hand — is kept, commented out, in `embed.py` and `retrieve.py` f
 - **Reference-free metric blind spot** — the RAG triad doesn't know the correct answer, so a wrong "I don't know" can still pass all three metrics (it's grounded and on-topic). Checking against expected answers catches this.
   > 中文：无参考指标的盲点：RAG triad 不知道正确答案是什么，所以一个错误的"我不知道"仍然可能三项全部通过（因为它没有编造，也回应了问题）。只有拿预期答案去对比才能发现这种错误。
 
+### Open question (untested hypothesis)
+
+- **Why did hybrid miss Micron's revenue on "Which company had higher revenue, Alphabet or Micron?"** — In a live API call, vector retrieval returned a Micron chunk with the revenue line, and hybrid returned none. One guess, not yet tested: BM25 matched common words in the question ("revenue", "company", "higher") across many Micron chunks, and those BM25 ranks outvoted the vector ranking in RRF. To test it: print the vector top-20 and BM25 top-20 Micron ids for this question and check where the revenue chunk ranks in each.
+  > 中文：为什么在"Alphabet 和 Micron 哪家收入更高？"这个问题上，混合检索没有找到 Micron 的收入数据？实际调用 API 时，向量检索返回了包含收入数字的 Micron 分块，而混合检索一个都没有。一个尚未验证的猜测：BM25 匹配到了问题里的常见词（"revenue"、"company"、"higher"），这些词出现在很多 Micron 分块中，它们的排名在 RRF 融合时压过了向量检索的排名。验证方法：打印这个问题在 Micron 上的向量前 20 名和 BM25 前 20 名，看收入分块在两个列表里分别排第几。
+
 ## Step 8: FastAPI service
 
 ### How this step works
@@ -389,3 +394,52 @@ similarity by hand — is kept, commented out, in `embed.py` and `retrieve.py` f
 
 - **TestClient** — FastAPI's in-process test client (built on `httpx`). It sends fake HTTP requests straight to the app without starting a real server or opening a network port.
   > 中文：TestClient 是 FastAPI 自带的进程内测试客户端（基于 `httpx`），可以直接把模拟的 HTTP 请求发给应用，不需要真的启动服务器或打开网络端口。
+
+## Step 9: Docker image
+
+### How this step works
+
+**`Dockerfile` (build time, top to bottom)**
+1. Start from `python:3.12-slim`, a small Debian image with Python 3.12 (matching `.python-version`), and copy in the `uv` binary from uv's official image, pinned to version 0.10.10.
+   > 中文：以 `python:3.12-slim`（一个精简的、带 Python 3.12 的 Debian 镜像，和 `.python-version` 一致）为基础，再从 uv 官方镜像里复制 `uv` 程序进来，版本固定为 0.10.10。
+2. Set the working directory to `/app`.
+   > 中文：把工作目录设为 `/app`。
+3. Copy only `pyproject.toml`, `uv.lock` and `.python-version`, then run `uv sync --frozen --no-dev` to install the exact locked runtime dependencies (no dev tools) into `/app/.venv`.
+   > 中文：只复制 `pyproject.toml`、`uv.lock` 和 `.python-version`，然后运行 `uv sync --frozen --no-dev`，把锁定版本的运行时依赖（不含开发工具）装进 `/app/.venv`。
+4. Copy the source code. `.dockerignore` decides what's allowed in: only `*.py`, `pyproject.toml`, `uv.lock`, `.python-version` and `README.md`.
+   > 中文：复制源代码。哪些文件能进镜像由 `.dockerignore` 决定：只允许 `*.py`、`pyproject.toml`、`uv.lock`、`.python-version` 和 `README.md`。
+5. Set `UV_NO_SYNC=1`, so `uv run` uses the venv that was just built instead of re-checking the lock or installing dev dependencies at startup.
+   > 中文：设置 `UV_NO_SYNC=1`，让 `uv run` 直接使用刚才装好的虚拟环境，而不是在容器启动时重新检查锁文件或安装开发依赖。
+6. Declare port 8000 and set the start command: `uv run uvicorn api:app --host 0.0.0.0 --port 8000`.
+   > 中文：声明端口 8000，并设置启动命令：`uv run uvicorn api:app --host 0.0.0.0 --port 8000`。
+
+**`docker run -p 8000:8000 --env-file .env -v "$(pwd)/data:/app/data" filings-rag` (run time)**
+1. `--env-file .env` passes `OPENAI_API_KEY` into the container as an environment variable. The key is never inside the image, and without it the app exits at import with `KeyError`.
+   > 中文：`--env-file .env` 把 `OPENAI_API_KEY` 作为环境变量传进容器。密钥从来不在镜像里；如果不传，程序在导入时就会因为 `KeyError` 退出。
+2. `-v "$(pwd)/data:/app/data"` mounts the host's `data/` folder (the Chroma index) into the container, so `PersistentClient("data/chroma")` finds the existing index. Without it, Chroma is empty and every `/ask` returns 400.
+   > 中文：`-v "$(pwd)/data:/app/data"` 把主机上的 `data/` 文件夹（Chroma 索引）挂载进容器，这样 `PersistentClient("data/chroma")` 能找到已有的索引。不挂载的话 Chroma 是空的，每次 `/ask` 都会返回 400。
+3. `-p 8000:8000` forwards the host's port 8000 to the container's port 8000, where uvicorn is listening.
+   > 中文：`-p 8000:8000` 把主机的 8000 端口转发到容器的 8000 端口，也就是 uvicorn 监听的端口。
+
+### Terms
+
+- **Image vs. container** — an image is the frozen, read-only package (OS + Python + dependencies + code). A container is one running instance of that image. `docker build` makes the image, and `docker run` starts a container from it.
+  > 中文：镜像和容器：镜像（image）是打包好的只读文件（操作系统 + Python + 依赖 + 代码）；容器（container）是这个镜像的一个运行实例。`docker build` 生成镜像，`docker run` 从镜像启动容器。
+
+- **Layer caching** — each Dockerfile step produces a cached layer, and a step only re-runs if its inputs changed. Copying `pyproject.toml`/`uv.lock` and installing dependencies *before* copying the code means a code-only change skips the slow dependency install.
+  > 中文：分层缓存：Dockerfile 里每一步都会生成一个被缓存的"层"，只有输入变了这一步才会重新执行。先复制 `pyproject.toml`/`uv.lock` 并安装依赖、再复制代码，这样只改代码时就能跳过耗时的依赖安装。
+
+- **`.dockerignore` (allowlist style)** — controls which files are sent to the build. Here it starts with `*` (exclude everything) and then re-includes only what's needed with `!`, so secrets and private files stay out even if new ones are added later.
+  > 中文：`.dockerignore`（白名单写法）控制哪些文件会被送进构建。这里先写 `*`（排除所有文件），再用 `!` 只加回需要的文件，这样即使以后新增了密钥文件或私人笔记，也不会被打包进镜像。
+
+- **Bind-mount volume (`-v host:container`)** — makes a host folder appear inside the container. The data lives on the host, so it survives container restarts and isn't baked into the image.
+  > 中文：绑定挂载（`-v 主机路径:容器路径`）让主机上的文件夹出现在容器里。数据实际存在主机上，所以容器重启后数据还在，也不会被打包进镜像。
+
+- **`--env-file`** — loads `KEY=value` lines from a file as environment variables for the container at run time. This is how secrets reach the app without being written into the image.
+  > 中文：`--env-file` 在运行时把文件里的 `KEY=value` 逐行加载成容器的环境变量。密钥就是这样传给程序的，而不会被写进镜像。
+
+- **`--host 0.0.0.0`** — tells uvicorn to listen on all network interfaces inside the container. The default (`127.0.0.1`) would only accept connections from inside the container itself, so port forwarding from the host wouldn't work.
+  > 中文：`--host 0.0.0.0` 让 uvicorn 在容器内的所有网络接口上监听。默认的 `127.0.0.1` 只接受容器内部自己的连接，那样主机通过端口转发是连不上的。
+
+- **`uv sync --frozen`** — installs exactly what `uv.lock` says and fails instead of silently updating the lock, so the image gets the same package versions as local development (including the `chromadb` version that wrote `data/`).
+  > 中文：`uv sync --frozen` 严格按照 `uv.lock` 安装，如果锁文件和配置不一致就直接报错，而不是悄悄更新锁文件。这样镜像里的包版本和本地开发完全一致（包括写入 `data/` 的那个 `chromadb` 版本）。

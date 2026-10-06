@@ -1,0 +1,8 @@
+# Allowlist: exclude everything, then re-include only what the image needs. Anything new (secrets, notes,
+# data) stays out by default -- including .env, .venv, data/, __pycache__, .pytest_cache, .git, INTERVIEW_NOTES.md.
+*
+!*.py
+!pyproject.toml
+!uv.lock
+!.python-version
+!README.md

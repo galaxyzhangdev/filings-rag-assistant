@@ -110,10 +110,8 @@ chunks with no revenue figure at all. The model still drew the comparison
 with Micron's side missing — it said the figure wasn't in the excerpts,
 then concluded "Alphabet had higher revenue" anyway. The conclusion
 happens to be right, but it wasn't supported by the context. One question,
-not a measured rate. Why hybrid missed it isn't traced yet. One unverified
-guess: BM25 matching common words ("revenue", "company", "higher")
-outvoted the vector ranking for Micron. Hybrid response, unedited except
-chunk `text` truncated to 80 characters:
+not a measured rate. Why hybrid missed it isn't traced yet. Hybrid
+response, unedited except chunk `text` truncated to 80 characters:
 
 ```json
 {
@@ -278,6 +276,7 @@ See "Hybrid retrieval" above for the latest vector-vs-hybrid results.
 - `chromadb` — local embedded vector database, persisted to disk, no server
 - `arize-phoenix-evals` — RAG triad evaluation
 - `fastapi` + `uvicorn` — HTTP API (`api.py`); `httpx` (dev) for `TestClient` in `test_api.py`
+- Docker — `python:3.12-slim` image with a pinned `uv`, runtime deps only
 
 ## Running it
 
@@ -400,9 +399,40 @@ Optional fields: `tickers` (default `["GOOGL", "MU"]`), `method`
 An unknown ticker returns
 `400 {"detail": "Ticker(s) not indexed: ZZZZ. Ingest them first."}`.
 
+## Docker
+
+```bash
+docker build -t filings-rag .
+docker run -p 8000:8000 --env-file .env -v "$(pwd)/data:/app/data" filings-rag
+# or, equivalently:
+docker compose up --build
+```
+
+Then use the same `curl` calls as in "Run the API" above.
+
+- **The `data/` volume is required.** The image contains code only. The
+  Chroma index (`data/chroma`) stays on the host and is mounted in.
+  Without `-v .../data:/app/data`, Chroma starts empty and **every `/ask`
+  returns 400** ("Ticker(s) not indexed"). Build the index first on the host
+  (`ingest.py`, `embed.py`). `uv sync --frozen` installs the exact
+  `chromadb` version from `uv.lock`, so the container reads the same
+  on-disk format that wrote it.
+- **The key is passed at runtime, never baked in.** `--env-file .env`
+  supplies `OPENAI_API_KEY`. Without it the container exits at import
+  (`embed.py` reads the key on startup).
+- **`.dockerignore` is an allowlist.** Only `*.py`, `pyproject.toml`,
+  `uv.lock`, `.python-version` and `README.md` are sent to the build, so
+  `.env`, `data/`, `.venv`, `.git` and private notes can't end up in the
+  image, including files added later. Checked by exporting the image
+  filesystem: the real key appears 0 times.
+- **Layer caching**: dependencies (`uv sync --frozen --no-dev`) install
+  before the source is copied, so a code-only change rebuilds in seconds.
+- Image size: 797 MB (arm64). Most of it is `chromadb`/`onnxruntime`. It
+  also includes `arize-phoenix-evals`, which only `eval.py` needs, because
+  it's a main dependency. The container runs as root.
+
 ## Roadmap (in progress)
 
-- Docker
 - GitHub Actions CI with an evaluation regression gate
 
 ## Current limitations
@@ -424,5 +454,5 @@ An unknown ticker returns
   multiple share classes.
 - **No judge calibration** — RAG triad scores come from an LLM judge
   (`gpt-4.1-mini`) with no calibration against hand-labeled ground truth.
-- **Not deployed** — the FastAPI service runs locally only; no
-  containerization or hosting yet, and no auth on the API.
+- **Not hosted** — containerized (Docker) but not hosted anywhere; no
+  auth on the API.
