@@ -500,3 +500,25 @@ similarity by hand — is kept, commented out, in `embed.py` and `retrieve.py` f
 
 - **Why `--no-cache` for the gate** — the answer cache is keyed only by `method::question`, not by the code. If CI reused cached answers, a code change that broke retrieval would still be scored on old, good answers, and the gate could never fail.
   > 中文：为什么门禁要用 `--no-cache`：答案缓存的键只有"方法::问题"，不包含代码版本。如果 CI 复用缓存的答案，即使代码改动破坏了检索，打分用的还是以前好的答案，门禁就永远不会失败。
+
+### Gate validation: two deliberate regressions
+
+Each one ran on a throwaway branch (since deleted), with the eval gate triggered by hand, the same cached Chroma index as `main`, and freshly generated answers.
+
+| Run | Context relevance | Groundedness | Answer relevance | Eval gate | `tests` job |
+|---|---|---|---|---|---|
+| `main` | 0.83 | 1.00 | 1.00 | pass | pass |
+| Inverted retrieval (k least similar chunks) | 0.00 | 1.00 | 1.00 | **fail** | fail |
+| Global top-k (Step 6 bug) | 0.78 | 1.00 | 1.00 | **pass (missed)** | fail |
+
+- **Wiring check (inverted retrieval)** — the gate went red, as it must: context relevance dropped to 0.00, and `eval.py` exited 1. Groundedness and answer relevance stayed at 1.00, because the model honestly says "I don't know" and the judges rate that as grounded and on-topic.
+  > 中文：接线检查（反向检索）：门禁按预期变红——上下文相关性降到 0.00，`eval.py` 以退出码 1 结束。但忠实度和答案相关性仍然是 1.00，因为模型老实地回答"不知道"，评委认为这样的回答既有依据又切题。所以在检索出问题时，只有上下文相关性这一项会明显下降。
+
+- **Real bug (global top-k)** — the gate stayed green: context relevance was 0.78, above the 0.75 floor (it was 0.72 in Step 6). A 0.05 drop is about the size of judge noise on 18 questions, so this floor can't reliably tell this bug apart from noise. The threshold was not tuned afterwards to force a failure.
+  > 中文：真实 bug（全局 top-k）：门禁没有变红——上下文相关性是 0.78，高于 0.75 的下限（第 6 步时是 0.72）。在 18 道题上，0.05 的下降和评委本身的波动差不多大，所以这个下限无法可靠地区分这个 bug 和噪声。事后没有为了让它失败而去调阈值。
+
+- **What did catch it** — the free `tests` job: `test_retrieve.py` asserts that every requested ticker appears in the results. For retrieval-wiring bugs, a deterministic unit test is the reliable guard, and the LLM-judged gate is only a coarse backstop.
+  > 中文：真正抓到这个 bug 的是免费的 `tests` 任务：`test_retrieve.py` 会断言每个请求的股票代码都出现在结果里。对于检索逻辑这类 bug，确定性的单元测试才是可靠的防线；用大模型打分的门禁只是一道粗略的兜底。
+
+- **Next step (not built)** — a reference-based check, such as expected figures for factual questions or "both companies present in the context" for cross-company questions, would catch this class of bug directly.
+  > 中文：下一步（尚未实现）：加入基于参考答案的检查，比如事实类问题的预期数字、跨公司问题要求上下文里同时出现两家公司，就能直接抓到这类 bug。

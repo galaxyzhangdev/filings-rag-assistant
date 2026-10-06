@@ -471,6 +471,42 @@ Three GitHub Actions jobs in two workflows:
 - The workflows use `permissions: contents: read`, and the secret is passed
   only to the two steps that call OpenAI.
 
+### Does the gate catch regressions? Two deliberate tests
+
+Each regression was pushed to a throwaway branch (since deleted), and the
+eval gate was triggered on it by hand. All runs restored the same cached
+Chroma index as `main` and regenerated every answer, so only the code
+differed.
+
+| Run | Context relevance | Groundedness | Answer relevance | Eval gate | `tests` job |
+|---|---|---|---|---|---|
+| `main`, no regression | 0.83 | 1.00 | 1.00 | ✅ pass | ✅ pass |
+| **Inverted retrieval**: return the k *least* similar chunks per ticker | **0.00** | 1.00 | 1.00 | ❌ **fail** (exit 1) | ❌ fail |
+| **Global top-k**: one top-5 across both tickers instead of per ticker (the Step 6 cross-company bug) | **0.78** | 1.00 | 1.00 | ✅ **pass, so it missed the bug** | ❌ fail |
+
+- **The gate is wired correctly.** Useless context drives context
+  relevance to 0.00, and `eval.py` exits 1. Groundedness and answer
+  relevance stayed at 1.00 even then: the model correctly says it doesn't
+  know, which the judges rate as grounded and on-topic. **Context relevance
+  is the only metric that moves on retrieval failures.**
+- **The real bug slipped through.** Global top-k scored 0.78 here (0.72
+  when eval first caught it in Step 6), above the 0.75 floor. A 0.05 drop
+  is about the size of LLM-judge noise on 18 questions, so this floor can't
+  reliably separate the bug from noise. The threshold wasn't tuned after
+  the fact to make it fail.
+- **The cheap deterministic test caught it.** `test_retrieve.py` asserts
+  that every requested ticker appears in the results, so the free `tests`
+  job went red on that branch. For retrieval-wiring bugs, the unit test is
+  the dependable guard, and the LLM-judged gate is a coarse backstop.
+- Not built yet: a reference-based check (expected figures for factual
+  questions, and both companies present in the context for cross-company
+  ones) would catch this class of bug directly.
+- The global top-k branch didn't run the commented-out first version
+  verbatim, because that code reads embeddings from `embed_ticker()`,
+  which no longer returns them after the Chroma migration. It ran the same
+  logic against Chroma: one query with
+  `where={"ticker": {"$in": tickers}}`, `n_results=5`.
+
 ## Current limitations
 
 - **No reranker** — hybrid retrieval exists but fused results aren't
