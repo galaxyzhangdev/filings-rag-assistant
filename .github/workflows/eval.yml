@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: [retrieve.py, generate.py, embed.py, ingest.py, eval.py]
+    paths: [retrieve.py, generate.py, embed.py, ingest.py, eval.py, .github/workflows/eval.yml]
 
 permissions:
   contents: read
@@ -17,7 +17,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.2.0
         with:
           version: "0.10.10"
           enable-cache: true

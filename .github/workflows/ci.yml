@@ -16,7 +16,7 @@ jobs:
       OPENAI_API_KEY: ci-dummy-not-a-real-key
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.2.0
         with:
           version: "0.10.10"
           enable-cache: true
