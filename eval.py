@@ -1,6 +1,7 @@
 """Run the hand-written eval set through the RAG pipeline and score it with the RAG triad via Phoenix."""
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -155,9 +156,15 @@ if __name__ == "__main__":
     total_tokens = sum(r["tokens"] for r in eval_results)
     total_latency = sum(r["latency"] for r in eval_results)
     print(f"[{args.method} / {args.eval_set}] {len(eval_results)} questions | total tokens: {total_tokens} | total latency: {total_latency:.1f}s")
-    for metric in ("context_relevance", "groundedness", "answer_relevance"):
-        avg = sum(r[metric] for r in eval_results) / len(eval_results)
+    averages = {m: sum(r[m] for r in eval_results) / len(eval_results) for m in GATE_THRESHOLDS}
+    for metric, avg in averages.items():
         print(f"avg {metric}: {avg:.2f}")
+
+    # On GitHub Actions, also emit the averages as a run annotation: visible on the run page, and readable via
+    # the public API without the admin rights that job logs require.
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        summary = " ".join(f"{m}={avg:.2f}" for m, avg in averages.items())
+        print(f"::notice title=RAG triad averages ({args.method} / {args.eval_set})::{summary}")
 
     # Gate only the configuration the floors were calibrated on: core set, vector method.
     if args.method == "vector" and args.eval_set == "core":
