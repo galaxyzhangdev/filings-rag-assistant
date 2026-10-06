@@ -1,7 +1,12 @@
 """Self-check: API status codes and response shape, with generate.answer and the index check mocked (no network)."""
 import os
+import tempfile
 
-os.environ["OPENAI_API_KEY"] = "test-dummy"  # embed.py reads the key at import time; all API calls are mocked
+# Run with no .env and no real data: a dummy key (embed.py reads it at import; all API calls are mocked) and a
+# throwaway Chroma dir (removed at exit), so this test never reads or writes data/chroma. Must precede imports.
+os.environ["OPENAI_API_KEY"] = "test-dummy"
+_chroma_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+os.environ["CHROMA_PATH"] = _chroma_dir.name
 
 from unittest.mock import patch
 

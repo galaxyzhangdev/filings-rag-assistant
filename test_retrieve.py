@@ -1,10 +1,19 @@
 """Self-check: Chroma-based retrieval ranks the closest chunk first, with no real API calls."""
+import os
+import tempfile
+
+# Run with no .env and no real data: a dummy key (embed.py reads it at import; all API calls are mocked) and a
+# throwaway Chroma dir (removed at exit), so this test never reads or writes data/chroma. Must precede imports.
+os.environ["OPENAI_API_KEY"] = "test-dummy"
+_chroma_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+os.environ["CHROMA_PATH"] = _chroma_dir.name
+
 from unittest.mock import patch
 
 from embed import collection
 from retrieve import retrieve
 
-DIM = 1536  # must match the collection's real embedding dimension (text-embedding-3-small)
+DIM = 1536  # text-embedding-3-small's dimension; Chroma fixes a collection's dimension on first add
 
 
 def _pad(x, y):
@@ -35,7 +44,6 @@ with patch("retrieve.embed_texts", return_value=[_pad(0.0, 1.0)]):
 assert len(results) == 2
 assert results[0]["text"] == "exact"
 assert results[0]["score"] > results[1]["score"]
-collection.delete(where={"ticker": "AAA"})
 
 # Per-ticker retrieval must guarantee both tickers appear, even when one scores much lower overall
 # (this is the cross-company bug: a single global top-k could otherwise drop the lower-scoring ticker).
@@ -53,8 +61,5 @@ with patch("retrieve.embed_texts", return_value=[_pad(0.0, 1.0)]):
 
 assert {r["ticker"] for r in results} == {"HIGH", "LOW"}
 assert len(results) == 2
-
-collection.delete(where={"ticker": "HIGH"})
-collection.delete(where={"ticker": "LOW"})
 
 print("ok")

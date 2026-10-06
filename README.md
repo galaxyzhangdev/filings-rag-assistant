@@ -294,7 +294,9 @@ uv run python eval.py --method hybrid --set keyword_exact   # other method / que
 Each `.py` module also has a matching `test_*.py` — plain `assert`-based
 scripts (no test framework), run directly with `uv run python test_X.py`.
 All OpenAI-hitting logic is mocked in tests; only `eval.py` and the
-`__main__` blocks above make real API calls.
+`__main__` blocks above make real API calls. Tests set a dummy
+`OPENAI_API_KEY` and point `CHROMA_PATH` at a throwaway temp directory, so
+they run without `.env` or `data/` and never read or write `data/chroma`.
 
 ## Run the API
 

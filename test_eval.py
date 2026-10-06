@@ -1,4 +1,13 @@
 """Self-check: eval answer caching skips re-generation on a repeat question, with no real API calls."""
+import os
+import tempfile
+
+# Run with no .env and no real data: a dummy key (embed.py reads it at import; all API calls are mocked) and a
+# throwaway Chroma dir (removed at exit), so this test never reads or writes data/chroma. Must precede imports.
+os.environ["OPENAI_API_KEY"] = "test-dummy"
+_chroma_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+os.environ["CHROMA_PATH"] = _chroma_dir.name
+
 from pathlib import Path
 from unittest.mock import patch
 

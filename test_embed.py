@@ -1,9 +1,18 @@
 """Self-check: embedding batching and Chroma cache-skip logic, with mocked HTTP (no real API calls/cost)."""
+import os
+import tempfile
+
+# Run with no .env and no real data: a dummy key (embed.py reads it at import; all API calls are mocked) and a
+# throwaway Chroma dir (removed at exit), so this test never reads or writes data/chroma. Must precede imports.
+os.environ["OPENAI_API_KEY"] = "test-dummy"
+_chroma_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+os.environ["CHROMA_PATH"] = _chroma_dir.name
+
 from unittest.mock import patch
 
 from embed import collection, embed_texts, embed_ticker
 
-DIM = 1536  # must match the collection's real embedding dimension (text-embedding-3-small)
+DIM = 1536  # text-embedding-3-small's dimension; Chroma fixes a collection's dimension on first add
 
 
 class FakeResponse:
@@ -41,7 +50,5 @@ with patch("embed.ingest_ticker", return_value=fake_chunks), \
 with patch("embed.embed_texts") as mock_embed:
     embed_ticker("TEST")
     assert mock_embed.call_count == 0
-
-collection.delete(where={"ticker": "TEST"})
 
 print("ok")

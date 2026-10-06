@@ -12,8 +12,9 @@ BATCH_SIZE = 100
 MAX_RETRIES = 5
 
 # Chroma: local embedded vector database, persisted to disk under data/chroma, no server to run.
+# CHROMA_PATH overrides the location (tests point it at a throwaway temp dir so they never touch data/chroma).
 # "hnsw:space": "cosine" makes query distances directly comparable to the old cosine-similarity scores.
-_client = chromadb.PersistentClient(path="data/chroma")
+_client = chromadb.PersistentClient(path=os.environ.get("CHROMA_PATH", "data/chroma"))
 collection = _client.get_or_create_collection("filing_chunks", metadata={"hnsw:space": "cosine"})
 
 
