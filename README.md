@@ -1,5 +1,7 @@
 # Filings RAG Assistant
 
+[![CI](https://github.com/galaxyzhangdev/filings-rag-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/galaxyzhangdev/filings-rag-assistant/actions/workflows/ci.yml)
+
 A retrieval-augmented generation (RAG) question-answering system over SEC
 10-K filings, built as a personal portfolio project to demonstrate RAG
 pipeline design and evaluation practice. Not a work project — no employer
@@ -433,9 +435,41 @@ Then use the same `curl` calls as in "Run the API" above.
   also includes `arize-phoenix-evals`, which only `eval.py` needs, because
   it's a main dependency. The container runs as root.
 
-## Roadmap (in progress)
+## CI
 
-- GitHub Actions CI with an evaluation regression gate
+Three GitHub Actions jobs in two workflows:
+
+| Job | Workflow | Runs on | Cost |
+|---|---|---|---|
+| `tests` — every `test_*.py` except `test_filings.py` (hits SEC live) | `ci.yml` | every push and pull request | free |
+| `docker` — `docker build .` to prove the image builds | `ci.yml` | every push and pull request | free |
+| `eval` — RAG-triad regression gate | `eval.yml` | manual dispatch, or push to `main` that changes `retrieve.py`, `generate.py`, `embed.py`, `ingest.py`, or `eval.py` | ~$0.12–0.15 per run |
+
+- **`tests` needs no secrets and no data.** Every OpenAI call is mocked,
+  the key is a dummy, and Chroma points at a throwaway temp directory
+  (`CHROMA_PATH`), so CI never needs `.env` or `data/`.
+- **The eval gate** runs the core 18 questions with the vector method and
+  `--no-cache`. Answers are regenerated every run: with the answer cache
+  (keyed by `method::question`), a code change that hurt retrieval would
+  still reuse old answers, and the gate could never fail. `eval.py` exits 1
+  if any average drops below its floor (`GATE_THRESHOLDS`): context
+  relevance ≥ 0.75, groundedness ≥ 0.90, answer relevance ≥ 0.90. The
+  floors sit below the measured 0.83 / 0.94–1.00 / 1.00 because the LLM
+  judge alone moves groundedness 1.00 ↔ 0.94 on identical answers.
+- **Why eval doesn't run on every push**: each run is 18 fresh answers + 54
+  judge calls on `gpt-4.1-mini`. That's cheap but not free, and pointless
+  when no pipeline code changed. **Why not on pull requests**: it needs
+  the `OPENAI_API_KEY` secret, and workflows triggered by fork PRs don't
+  receive secrets, so it would fail (and a PR shouldn't be able to spend
+  the key anyway).
+- **The Chroma index is cached** (`actions/cache`), keyed on
+  `chroma-v1-<hash of filings.py, ingest.py, embed.py, uv.lock>`, so SEC
+  download + embedding (~$0.01) only re-runs when one of those changes, the
+  cache is evicted (7 days unused), or `v1` is bumped to pick up newly filed
+  10-Ks. The index is saved right after it's built, so a red gate doesn't
+  discard it. The answer cache (`data/eval_cache.json`) is never cached in CI.
+- The workflows use `permissions: contents: read`, and the secret is passed
+  only to the two steps that call OpenAI.
 
 ## Current limitations
 

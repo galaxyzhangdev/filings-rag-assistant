@@ -1,0 +1,37 @@
+# Free checks on every push and PR: mocked test scripts and a Docker build. No secrets, no OpenAI calls.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # Plain-assert test scripts; every OpenAI call is mocked and Chroma uses a throwaway temp dir (no .env, no data/).
+  tests:
+    runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ci-dummy-not-a-real-key
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: "0.10.10"
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Run test scripts (all except test_filings.py, which hits SEC live)
+        run: |
+          for t in test_*.py; do
+            [ "$t" = test_filings.py ] && continue
+            echo "== $t"
+            uv run python "$t"
+          done
+
+  # Prove the image still builds; nothing is pushed anywhere.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -t filings-rag .

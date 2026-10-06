@@ -68,7 +68,8 @@ under control:
 - Cache embeddings and chunks (see step 2) so nothing is re-embedded.
 - Cache LLM answers per (question, retrieval method) pair during
   evaluation so re-running the eval script doesn't re-call the API for
-  unchanged inputs.
+  unchanged inputs. (Exception: the CI eval gate deliberately runs
+  `eval.py --no-cache`, so code changes are actually re-scored.)
 - When testing/debugging, prefer re-running against cached data over
   re-triggering live API calls.
 

@@ -443,3 +443,60 @@ similarity by hand — is kept, commented out, in `embed.py` and `retrieve.py` f
 
 - **`uv sync --frozen`** — installs exactly what `uv.lock` says and fails instead of silently updating the lock, so the image gets the same package versions as local development (including the `chromadb` version that wrote `data/`).
   > 中文：`uv sync --frozen` 严格按照 `uv.lock` 安装，如果锁文件和配置不一致就直接报错，而不是悄悄更新锁文件。这样镜像里的包版本和本地开发完全一致（包括写入 `data/` 的那个 `chromadb` 版本）。
+
+## Step 10: GitHub Actions CI
+
+### How this step works
+
+**`.github/workflows/ci.yml` -> job `tests`** (every push and pull request)
+1. Check out the code, install `uv` (pinned to 0.10.10), and run `uv sync --frozen` to install the exact locked dependencies.
+   > 中文：拉取代码，安装 `uv`（固定为 0.10.10 版本），再运行 `uv sync --frozen` 安装锁文件里指定的精确依赖版本。
+2. Run every `test_*.py` except `test_filings.py` (it calls SEC live). Each test sets a dummy OpenAI key and a temp Chroma directory itself, so no `.env`, no `data/`, and no OpenAI calls. Any failed assert stops the job and turns it red.
+   > 中文：运行除 `test_filings.py`（它会实时请求 SEC）以外的所有 `test_*.py`。每个测试自己设置假的 OpenAI 密钥和临时的 Chroma 目录，所以不需要 `.env`、不需要 `data/`，也不会调用 OpenAI。任何一个断言失败都会让这个任务停止并变红。
+
+**`.github/workflows/ci.yml` -> job `docker`** (every push and pull request)
+1. Check out the code and run `docker build`, to prove the image still builds. Nothing is pushed anywhere.
+   > 中文：拉取代码并运行 `docker build`，证明镜像依然能构建成功。不会推送到任何地方。
+
+**`.github/workflows/eval.yml` -> job `eval`** (manual dispatch, or push to `main` that changes pipeline code)
+1. Install `uv` and the runtime dependencies (no dev tools).
+   > 中文：安装 `uv` 和运行时依赖（不含开发工具）。
+2. Try to restore `data/chroma` from the GitHub Actions cache, using a key built from the hash of `filings.py`, `ingest.py`, `embed.py` and `uv.lock`.
+   > 中文：尝试从 GitHub Actions 缓存里恢复 `data/chroma`，缓存的键由 `filings.py`、`ingest.py`、`embed.py` 和 `uv.lock` 的哈希值组成。
+3. On a cache miss, run `embed.py`, which downloads and chunks GOOGL and MU filings from SEC and embeds them, then save the index to the cache right away.
+   > 中文：如果缓存没命中，就运行 `embed.py`（它会从 SEC 下载并切分 GOOGL 和 MU 的年报，再生成向量），然后立刻把索引存进缓存。
+4. Run `eval.py --no-cache`. That regenerates all 18 core answers with the vector method, scores them with the RAG triad, and exits with code 1 if any average is below its floor in `GATE_THRESHOLDS`, which turns the job red.
+   > 中文：运行 `eval.py --no-cache`：用向量检索重新生成全部 18 个核心问题的答案，用 RAG triad 打分；如果任何一项平均分低于 `GATE_THRESHOLDS` 里的下限，就以退出码 1 结束，让任务变红。
+
+**`eval.py` -> `run_eval(method, eval_set, use_cache=False)`**
+1. With `use_cache=False`, skip loading the answer cache and call `answer()` directly for every question, so nothing is read from or written to `data/eval_cache.json`.
+   > 中文：当 `use_cache=False` 时，不加载答案缓存，而是对每个问题直接调用 `answer()`，所以既不读也不写 `data/eval_cache.json`。
+2. Score each answer with the three judges and return the per-question results, the same as before.
+   > 中文：用三个评委给每个答案打分，返回每道题的结果，和之前一样。
+
+**`eval.py` -> `gate_failures(results)`**
+1. For each metric in `GATE_THRESHOLDS`, average it over all questions. If the average is below the floor, add a message like `"context_relevance 0.72 < 0.75"`. Return the list, where an empty list means the gate passes.
+   > 中文：对 `GATE_THRESHOLDS` 里的每个指标，计算所有问题的平均分；如果低于下限，就记录一条类似 `"context_relevance 0.72 < 0.75"` 的信息。返回这个列表，空列表代表通过。
+
+### Terms
+
+- **GitHub Actions / workflow / job / step** — GitHub's built-in CI. A workflow is a YAML file in `.github/workflows/`, a job is a group of steps that run on one fresh virtual machine (a "runner"), and a step is one command or reusable action.
+  > 中文：GitHub Actions 是 GitHub 自带的持续集成（CI）。workflow（工作流）是 `.github/workflows/` 里的一个 YAML 文件；job（任务）是在一台全新虚拟机（runner）上运行的一组步骤；step（步骤）是一条命令或一个可复用的 action。
+
+- **Trigger (`on:`)** — what starts a workflow: `push`, `pull_request`, `workflow_dispatch` (a manual "Run workflow" button), etc. `paths:` limits a push trigger to commits that touch certain files, and it applies to the whole workflow, which is why eval lives in its own file.
+  > 中文：触发条件（`on:`）决定什么时候启动工作流，比如 `push`、`pull_request`、`workflow_dispatch`（手动点"Run workflow"按钮）等。`paths:` 可以限定只有改动了特定文件的提交才触发；它作用于整个工作流，所以评测单独放在一个文件里。
+
+- **Repository secret** — an encrypted value (here `OPENAI_API_KEY`) stored in the repo settings and injected into a step as `${{ secrets.NAME }}`. GitHub masks it in logs, and workflows triggered from fork pull requests don't receive it.
+  > 中文：仓库密钥（secret）是存在仓库设置里的加密值（这里是 `OPENAI_API_KEY`），通过 `${{ secrets.NAME }}` 注入到某个步骤里。GitHub 会在日志里把它遮住；由 fork 仓库的 PR 触发的工作流拿不到它。
+
+- **Regression gate** — an automated check that fails the build when quality drops below a set level. Here, if any RAG-triad average falls below its floor, `eval.py` exits with code 1 and the CI job turns red.
+  > 中文：回归门禁（regression gate）是一种自动检查：质量低于设定水平时让构建失败。这里只要 RAG triad 任何一项平均分低于下限，`eval.py` 就以退出码 1 结束，CI 任务变红。
+
+- **Exit code** — the number a program returns when it finishes. 0 means success, and anything else means failure. CI decides green or red purely from this number.
+  > 中文：退出码（exit code）是程序结束时返回的数字：0 表示成功，非 0 表示失败。CI 完全根据这个数字判断是绿还是红。
+
+- **`actions/cache` (restore / save)** — stores a folder between workflow runs under a key. If the key matches, the folder is restored ("cache hit"). If anything in the key changes, it's a miss and the folder gets rebuilt.
+  > 中文：`actions/cache`（恢复 / 保存）可以在多次工作流运行之间按"键"保存一个文件夹。键相同就恢复（命中缓存）；键里任何内容变了就不命中，需要重新生成。
+
+- **Why `--no-cache` for the gate** — the answer cache is keyed only by `method::question`, not by the code. If CI reused cached answers, a code change that broke retrieval would still be scored on old, good answers, and the gate could never fail.
+  > 中文：为什么门禁要用 `--no-cache`：答案缓存的键只有"方法::问题"，不包含代码版本。如果 CI 复用缓存的答案，即使代码改动破坏了检索，打分用的还是以前好的答案，门禁就永远不会失败。

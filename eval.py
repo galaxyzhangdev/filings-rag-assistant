@@ -1,6 +1,7 @@
 """Run the hand-written eval set through the RAG pipeline and score it with the RAG triad via Phoenix."""
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from phoenix.evals import LLM, create_classifier
@@ -9,6 +10,11 @@ from phoenix.evals.metrics import FaithfulnessEvaluator, RetrievalRelevanceEvalu
 from generate import answer
 
 CACHE_PATH = Path("data/eval_cache.json")
+
+# Regression gate (core set, vector method): eval.py exits 1 if any RAG-triad average falls below its floor.
+# Floors sit below measured scores (0.83 / 0.94 / 1.00) to absorb judge noise: groundedness alone moved
+# 1.00 -> 0.94 on identical cached answers, so a 0.95 floor would fail on noise.
+GATE_THRESHOLDS = {"context_relevance": 0.75, "groundedness": 0.90, "answer_relevance": 0.90}
 
 # Hand-written eval set on Alphabet (GOOGL) and Micron (MU) only, per project scope.
 EVAL_SET = [
@@ -80,9 +86,13 @@ def build_answer_relevance_evaluator(llm: LLM):
     )
 
 
-def run_eval(method: str = "vector", eval_set: list[dict] = EVAL_SET) -> list[dict]:
-    """Run every eval question through the RAG pipeline (cached per method) and score it with the RAG triad."""
-    cache = _load_cache()
+def run_eval(method: str = "vector", eval_set: list[dict] = EVAL_SET, use_cache: bool = True) -> list[dict]:
+    """Run every eval question through the RAG pipeline and score it with the RAG triad.
+
+    use_cache=False regenerates every answer and never reads or writes data/eval_cache.json, so a code
+    change that hurts retrieval actually shows up in the scores (CI's gate runs this way).
+    """
+    cache = _load_cache() if use_cache else {}
     llm = LLM(provider="openai", model="gpt-4.1-mini")
     context_relevance_eval = RetrievalRelevanceEvaluator(llm=llm)
     groundedness_eval = FaithfulnessEvaluator(llm=llm)
@@ -91,7 +101,7 @@ def run_eval(method: str = "vector", eval_set: list[dict] = EVAL_SET) -> list[di
     results = []
     for item in eval_set:
         question, category = item["question"], item["category"]
-        result = get_cached_answer(question, cache, method)
+        result = get_cached_answer(question, cache, method) if use_cache else answer(question, method=method)
         eval_input = {"input": question, "output": result["answer"], "context": result["context"]}
 
         context_score = context_relevance_eval.evaluate(eval_input)[0]
@@ -122,12 +132,25 @@ def run_eval(method: str = "vector", eval_set: list[dict] = EVAL_SET) -> list[di
     return results
 
 
+def gate_failures(results: list[dict]) -> list[str]:
+    """Return one message per RAG-triad average below its GATE_THRESHOLDS floor; an empty list means the gate passes."""
+    failures = []
+    for metric, floor in GATE_THRESHOLDS.items():
+        avg = sum(r[metric] for r in results) / len(results)
+        if avg < floor:
+            failures.append(f"{metric} {avg:.2f} < {floor:.2f}")
+    return failures
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the RAG triad eval for one retrieval method and eval set.")
     parser.add_argument("--method", choices=("vector", "hybrid"), default="vector")
     parser.add_argument("--set", dest="eval_set", choices=("core", "keyword_exact"), default="core")
+    parser.add_argument("--no-cache", action="store_true", help="regenerate answers; never read/write the answer cache")
     args = parser.parse_args()
-    eval_results = run_eval(args.method, EVAL_SET if args.eval_set == "core" else KEYWORD_EVAL_SET)
+    eval_results = run_eval(
+        args.method, EVAL_SET if args.eval_set == "core" else KEYWORD_EVAL_SET, use_cache=not args.no_cache
+    )
 
     total_tokens = sum(r["tokens"] for r in eval_results)
     total_latency = sum(r["latency"] for r in eval_results)
@@ -135,3 +158,11 @@ if __name__ == "__main__":
     for metric in ("context_relevance", "groundedness", "answer_relevance"):
         avg = sum(r[metric] for r in eval_results) / len(eval_results)
         print(f"avg {metric}: {avg:.2f}")
+
+    # Gate only the configuration the floors were calibrated on: core set, vector method.
+    if args.method == "vector" and args.eval_set == "core":
+        failures = gate_failures(eval_results)
+        if failures:
+            print("GATE FAILED: " + "; ".join(failures))
+            sys.exit(1)
+        print("GATE PASSED")
