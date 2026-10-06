@@ -5,7 +5,7 @@ import time
 import requests
 
 from embed import OPENAI_HEADERS
-from retrieve import retrieve
+from retrieve import DEFAULT_TICKERS, retrieve
 
 SYSTEM_PROMPT = (
     "You are a financial analyst assistant. Answer the question using ONLY "
@@ -14,14 +14,16 @@ SYSTEM_PROMPT = (
 )
 
 
-def answer(question: str, top_k: int = 5, method: str = "vector") -> dict:
+def answer(
+    question: str, top_k: int = 5, method: str = "vector", tickers: tuple[str, ...] = DEFAULT_TICKERS
+) -> dict:
     """Retrieve relevant filing chunks, stuff them into a prompt, and call gpt-4.1-mini for an answer.
 
-    Returns the answer text along with the retrieved context, token usage, and latency,
-    so callers (e.g. evaluation) can score and log the full round trip. `method` picks the retrieval
-    method ("vector" or "hybrid").
+    Returns the answer text along with the retrieved context (as one prompt string and as the raw chunk
+    list), token usage, and latency, so callers (evaluation, the API) can score and log the full round trip.
+    `method` picks the retrieval method ("vector" or "hybrid"); `tickers` picks which companies to search.
     """
-    chunks = retrieve(question, top_k=top_k, method=method)
+    chunks = retrieve(question, tickers=tickers, top_k=top_k, method=method)
     context = "\n\n".join(f"[{c['ticker']} {c['year']}]\n{c['text']}" for c in chunks)
 
     messages = [
@@ -41,6 +43,7 @@ def answer(question: str, top_k: int = 5, method: str = "vector") -> dict:
     return {
         "answer": data["choices"][0]["message"]["content"],
         "context": context,
+        "chunks": chunks,
         "usage": data["usage"],
         "latency": latency,
     }

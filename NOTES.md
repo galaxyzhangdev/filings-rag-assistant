@@ -339,3 +339,53 @@ similarity by hand — is kept, commented out, in `embed.py` and `retrieve.py` f
 
 - **Reference-free metric blind spot** — the RAG triad doesn't know the correct answer, so a wrong "I don't know" can still pass all three metrics (it's grounded and on-topic). Checking against expected answers catches this.
   > 中文：无参考指标的盲点：RAG triad 不知道正确答案是什么，所以一个错误的"我不知道"仍然可能三项全部通过（因为它没有编造，也回应了问题）。只有拿预期答案去对比才能发现这种错误。
+
+## Step 8: FastAPI service
+
+### How this step works
+
+**`api.py` -> `health()`**
+1. Return `{"status": "ok"}` so anything watching the service (a person, a load balancer, CI) can confirm it's running.
+   > 中文：返回 `{"status": "ok"}`，让任何检查服务状态的一方（人、负载均衡器、CI）确认服务正在运行。
+
+**`api.py` -> `ask(req)`**
+1. FastAPI parses the JSON body into an `AskRequest`. If the question is empty or only whitespace, or a field is out of bounds, it returns 422 before our code runs.
+   > 中文：FastAPI 先把 JSON 请求体解析成 `AskRequest`。如果问题为空、只有空格，或者某个字段超出范围，FastAPI 会在我们的代码运行之前就直接返回 422。
+2. Uppercase and de-duplicate the tickers, keeping their order.
+   > 中文：把股票代码转成大写并去重，同时保持原来的顺序。
+3. Check every ticker with `is_indexed`. If any isn't in Chroma yet, return 400 naming it, without ingesting or embedding anything.
+   > 中文：用 `is_indexed` 检查每个股票代码。只要有一个还不在 Chroma 里，就返回 400 并写明是哪个，不在请求里做任何抓取或向量化。
+4. Call `generate.answer(question, top_k, method, tickers)`, the same function the CLI and eval use.
+   > 中文：调用 `generate.answer(question, top_k, method, tickers)`，也就是 CLI 和评测用的同一个函数。
+5. If an OpenAI call fails (`requests.RequestException`), return 502 with a fixed message and never the original error text.
+   > 中文：如果调用 OpenAI 失败（`requests.RequestException`），返回 502 和一条固定的提示，绝不返回原始错误信息。
+6. Build an `AskResponse` from the result (answer, chunk list, usage, latency) and return it. Pydantic checks that the response matches the declared types.
+   > 中文：用结果（答案、分块列表、token 用量、耗时）组装 `AskResponse` 并返回。Pydantic 会检查返回的数据是否符合声明的类型。
+
+**`embed.py` -> `is_indexed(ticker)`**
+1. Ask Chroma for at most one chunk with this ticker, and return True if one exists. `embed_ticker` now uses the same check.
+   > 中文：向 Chroma 查询这个股票代码的分块（最多取一条），只要有就返回 True。`embed_ticker` 现在也复用同一个检查。
+
+**`generate.py` -> `answer(question, top_k=5, method="vector", tickers=("GOOGL", "MU"))`**
+1. Same as before, except it now passes `tickers` to `retrieve()` and also returns the raw `chunks` list next to the joined `context` string, so the API can return structured chunks.
+   > 中文：和之前一样，只是现在会把 `tickers` 传给 `retrieve()`，并且除了拼接好的 `context` 字符串之外，还返回原始的 `chunks` 列表，方便 API 返回结构化的分块数据。
+
+### Terms
+
+- **FastAPI** — a Python web framework: you write normal functions, decorate them with a route (`@app.post("/ask")`), and it turns them into HTTP endpoints with automatic request validation and docs at `/docs`.
+  > 中文：FastAPI 是一个 Python Web 框架：写普通的函数，加上路由装饰器（比如 `@app.post("/ask")`），它就会变成 HTTP 接口，并自动做请求校验，还会在 `/docs` 生成接口文档。
+
+- **Uvicorn** — the server program that actually listens on a port and hands incoming HTTP requests to the FastAPI app (`uvicorn api:app` means "the `app` object in `api.py`").
+  > 中文：Uvicorn 是真正监听端口、把收到的 HTTP 请求交给 FastAPI 应用处理的服务器程序。`uvicorn api:app` 的意思是"运行 `api.py` 里的 `app` 对象"。
+
+- **Pydantic model** — a class that declares the expected fields and types of some data. FastAPI uses it to validate incoming JSON and to check and serialize the response.
+  > 中文：Pydantic 模型是一个声明数据应该有哪些字段、各是什么类型的类。FastAPI 用它来校验传进来的 JSON，也用它检查并输出返回的数据。注意 Pydantic v2 不会自动把整数转成字符串，类型不对会直接报错。
+
+- **HTTP status codes 422 / 400 / 502** — 422: the request body is malformed or fails validation. 400: the request is well-formed but asks for something we can't serve (an un-indexed ticker). 502: our server is fine but a service it depends on (OpenAI) failed.
+  > 中文：HTTP 状态码 422 / 400 / 502：422 表示请求体格式不对或没通过校验；400 表示请求格式没问题，但要的东西我们提供不了（比如没建索引的股票代码）；502 表示我们自己的服务没问题，但依赖的上游服务（OpenAI）出错了。
+
+- **Threadpool for blocking calls** — a plain `def` endpoint runs in a separate worker thread, so a slow blocking call (like `requests.post` to OpenAI) doesn't freeze the server for other requests.
+  > 中文：阻塞调用的线程池：用普通 `def` 写的接口会在单独的工作线程里运行，所以一个很慢的阻塞调用（比如用 `requests.post` 调 OpenAI）不会把整个服务器卡住，其他请求还能正常处理。
+
+- **TestClient** — FastAPI's in-process test client (built on `httpx`). It sends fake HTTP requests straight to the app without starting a real server or opening a network port.
+  > 中文：TestClient 是 FastAPI 自带的进程内测试客户端（基于 `httpx`），可以直接把模拟的 HTTP 请求发给应用，不需要真的启动服务器或打开网络端口。

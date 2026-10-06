@@ -72,10 +72,15 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
 #     return chunks
 
 
+def is_indexed(ticker: str) -> bool:
+    """Return True if a ticker's chunks are already stored in the Chroma collection."""
+    return bool(collection.get(where={"ticker": ticker.upper()}, limit=1)["ids"])
+
+
 def embed_ticker(ticker: str) -> None:
     """Embed a ticker's chunks and store them in the Chroma collection, skipping if already stored."""
     ticker = ticker.upper()
-    if collection.get(where={"ticker": ticker}, limit=1)["ids"]:
+    if is_indexed(ticker):
         return
 
     chunks = ingest_ticker(ticker)

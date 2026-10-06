@@ -24,7 +24,7 @@ flowchart LR
     end
 
     subgraph "Query time"
-        F["User question"] --> G["retrieve.py<br/>per ticker: vector (Chroma) or<br/>hybrid (vector + BM25, RRF), merge top-k"]
+        F["User question<br/>(CLI or api.py: POST /ask)"] --> G["retrieve.py<br/>per ticker: vector (Chroma) or<br/>hybrid (vector + BM25, RRF), merge top-k"]
         E --> G
         G --> H["generate.py<br/>gpt-4.1-mini + retrieved excerpts"]
         H --> I["Answer + context + usage/latency"]
@@ -102,6 +102,122 @@ filing. Notably, the RAG triad passed vector's wrong Q5 abstention on all
 three metrics — reference-free metrics can't tell a correct "I don't know"
 from a wrong one.
 
+**Observation (live API call, same question, same day):** for *"Which
+company had higher revenue, Alphabet or Micron?"*, vector retrieval
+returned a Micron chunk containing the revenue line (`Revenue $ 37,378`,
+with $25,111 and $15,540 for prior years); hybrid returned five Micron
+chunks with no revenue figure at all. The model still drew the comparison
+with Micron's side missing — it said the figure wasn't in the excerpts,
+then concluded "Alphabet had higher revenue" anyway. The conclusion
+happens to be right, but it wasn't supported by the context. One question,
+not a measured rate. Why hybrid missed it isn't traced yet. One unverified
+guess: BM25 matching common words ("revenue", "company", "higher")
+outvoted the vector ranking for Micron. Hybrid response, unedited except
+chunk `text` truncated to 80 characters:
+
+```json
+{
+  "answer": "Based on the provided excerpts:\n\n- Alphabet Inc. (GOOGL) revenues:\n  - 2024: $350,018 million\n  - 2023: $307,394 million\n\n- Micron Technology, Inc. (MU) excerpts do not provide a consolidated revenue figure directly, but discuss improvements, product segments, and market conditions without specifying total revenue amounts.\n\nSince Alphabet reported total revenues of approximately $350 billion in 2024, and no specific total revenue amount for Micron is given in the excerpts, we cannot find Micron's total revenue for direct comparison.\n\nTherefore, from the provided data, Alphabet had higher revenue. There is no revenue figure for Micron in the excerpts to contradict this.\n\nAnswer: Alphabet had higher revenue than Micron according to the information provided.",
+  "context": [
+    {
+      "ticker": "MU",
+      "year": "2025",
+      "text": " otherwise indicated. Our fiscal year is the 52 -  or 53-week period ending on t…",
+      "score": 0.028991596638655463
+    },
+    {
+      "ticker": "GOOGL",
+      "year": "2026",
+      "text": "   17   56,815   16   67,680   17   Other Americas (1) 18,320   6   20,418   6  …",
+      "score": 0.02886002886002886
+    },
+    {
+      "ticker": "GOOGL",
+      "year": "2025",
+      "text": " increased  $13.0 billion from 2023 to 2024 due to an increase in other cost of …",
+      "score": 0.027984344422700584
+    },
+    {
+      "ticker": "MU",
+      "year": "2024",
+      "text": "7 EBITDA Earnings before interest, taxes, depreciation, and amortization 2026 No…",
+      "score": 0.02632034632034632
+    },
+    {
+      "ticker": "MU",
+      "year": "2024",
+      "text": "IP LLC (“MimirIP”) submitted a complaint to the United States International Trad…",
+      "score": 0.02564102564102564
+    },
+    {
+      "ticker": "GOOGL",
+      "year": "2025",
+      "text": "  125,172   Commitments and Contingencies (Note 10) Stockholders’ equity: Prefer…",
+      "score": 0.01639344262295082
+    },
+    {
+      "ticker": "GOOGL",
+      "year": "2025",
+      "text": " be able to compete effectively or operate at sufficient levels of profitability…",
+      "score": 0.01639344262295082
+    },
+    {
+      "ticker": "MU",
+      "year": "2024",
+      "text": "(b).  ☐ Indicate by check mark whether the registrant is a shell company (as def…",
+      "score": 0.01639344262295082
+    },
+    {
+      "ticker": "MU",
+      "year": "2024",
+      "text": " A company’s internal control over financial reporting includes those policies a…",
+      "score": 0.01639344262295082
+    },
+    {
+      "ticker": "GOOGL",
+      "year": "2026",
+      "text": "0  $ 69,503  Total 1,050  19,190  20,240  (1)      In April 2024, the company's …",
+      "score": 0.016129032258064516
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 5188,
+    "completion_tokens": 161,
+    "total_tokens": 5349,
+    "prompt_tokens_details": {
+      "cached_tokens": 4992,
+      "audio_tokens": 0
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0,
+      "audio_tokens": 0,
+      "accepted_prediction_tokens": 0,
+      "rejected_prediction_tokens": 0
+    }
+  },
+  "latency": 2.352986707992386
+}
+```
+
+### FastAPI service
+
+`api.py` exposes the same pipeline over HTTP with two endpoints:
+`GET /health` and `POST /ask`. It contains no pipeline logic. `/ask`
+validates the request with Pydantic, calls `generate.answer()`, and returns
+the answer, the retrieved chunks (`ticker`, `year`, `text`, `score`), token
+usage, and latency.
+
+- **422**: the question is empty or whitespace-only, or a field is out of
+  bounds. Question length, ticker count, and `top_k` are capped because
+  each one drives per-request OpenAI cost.
+- **400**: a ticker isn't indexed in Chroma yet. The API never
+  ingests/embeds inside a request: that's a multi-minute, paid job that
+  belongs offline (`ingest.py` / `embed.py`), not behind an HTTP call.
+- **502**: an upstream OpenAI call failed. The response is a fixed message,
+  never the raw exception, which can carry request URLs or headers.
+- The handler is a plain `def`, not `async`, so FastAPI runs the blocking
+  OpenAI calls in its threadpool instead of stalling the event loop.
+
 ### The cross-company retrieval bug, and how eval caught it
 
 The first version of `retrieve()` combined every ticker's chunks into a
@@ -161,6 +277,7 @@ See "Hybrid retrieval" above for the latest vector-vs-hybrid results.
   - Embeddings: `text-embedding-3-small`
 - `chromadb` — local embedded vector database, persisted to disk, no server
 - `arize-phoenix-evals` — RAG triad evaluation
+- `fastapi` + `uvicorn` — HTTP API (`api.py`); `httpx` (dev) for `TestClient` in `test_api.py`
 
 ## Running it
 
@@ -180,9 +297,111 @@ scripts (no test framework), run directly with `uv run python test_X.py`.
 All OpenAI-hitting logic is mocked in tests; only `eval.py` and the
 `__main__` blocks above make real API calls.
 
+## Run the API
+
+```bash
+uv run uvicorn api:app --reload     # serves on http://localhost:8000 (docs at /docs)
+```
+
+```bash
+curl -X POST localhost:8000/ask -H 'Content-Type: application/json' \
+  -d '{"question": "Which company had higher revenue, Alphabet or Micron?"}'
+```
+
+Real response (default `method: "vector"`; only each chunk's `text` is
+truncated to 80 characters for display, everything else is verbatim):
+
+```json
+{
+  "answer": "Based on the provided excerpts:\n\n- Alphabet's revenues were:\n  - $350.0 billion for the year ended December 31, 2024 ([GOOGL 2025])\n  - $402.8 billion for the year ended December 31, 2025 ([GOOGL 2026])\n\n- Micron's revenues were:\n  - $25.1 billion for the year 2024 ([MU 2025])\n  - $37.4 billion for the year 2025 ([MU 2025])\n\nComparing these figures, Alphabet had significantly higher revenue than Micron in both years presented.\n\nAnswer: Alphabet had higher revenue than Micron.",
+  "context": [
+    {
+      "ticker": "MU",
+      "year": "2024",
+      "text": "(b).  ☐ Indicate by check mark whether the registrant is a shell company (as def…",
+      "score": 0.5598515272140503
+    },
+    {
+      "ticker": "MU",
+      "year": "2025",
+      "text": ") ( 425 ) Payments on equipment purchase contracts —   ( 149 ) ( 138 ) Proceeds …",
+      "score": 0.5540653467178345
+    },
+    {
+      "ticker": "MU",
+      "year": "2025",
+      "text": " in China may not purchase Micron products. The CAC decision has impacted our bu…",
+      "score": 0.5491504669189453
+    },
+    {
+      "ticker": "MU",
+      "year": "2024",
+      "text": " 2023 2024 Micron Technology, Inc. $ 100  $ 101  $ 163  $ 126  $ 157  $ 217  S&P…",
+      "score": 0.5432778596878052
+    },
+    {
+      "ticker": "MU",
+      "year": "2024",
+      "text": "In the fourth quarter of 2024, shares purchased under the authorization and shar…",
+      "score": 0.5428484678268433
+    },
+    {
+      "ticker": "GOOGL",
+      "year": "2025",
+      "text": "  125,172   Commitments and Contingencies (Note 10) Stockholders’ equity: Prefer…",
+      "score": 0.4748586416244507
+    },
+    {
+      "ticker": "GOOGL",
+      "year": "2026",
+      "text": "0  $ 69,503  Total 1,050  19,190  20,240  (1)      In April 2024, the company's …",
+      "score": 0.4733051061630249
+    },
+    {
+      "ticker": "GOOGL",
+      "year": "2025",
+      "text": " over year, primarily driven by an increase in Google Services revenues of $32.4…",
+      "score": 0.46966660022735596
+    },
+    {
+      "ticker": "GOOGL",
+      "year": "2026",
+      "text": " and percentages): Year Ended December 31, 2024 2025 $ Change % Change Consolida…",
+      "score": 0.4663117527961731
+    },
+    {
+      "ticker": "GOOGL",
+      "year": "2026",
+      "text": "'s cumulative five-year total stockholder return on capital stock with the cumul…",
+      "score": 0.4590519666671753
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 5303,
+    "completion_tokens": 137,
+    "total_tokens": 5440,
+    "prompt_tokens_details": {
+      "cached_tokens": 0,
+      "audio_tokens": 0
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0,
+      "audio_tokens": 0,
+      "accepted_prediction_tokens": 0,
+      "rejected_prediction_tokens": 0
+    }
+  },
+  "latency": 2.1326652500138152
+}
+```
+
+Optional fields: `tickers` (default `["GOOGL", "MU"]`), `method`
+(`"vector"` | `"hybrid"`, default `"vector"`), `top_k` (default 5).
+An unknown ticker returns
+`400 {"detail": "Ticker(s) not indexed: ZZZZ. Ingest them first."}`.
+
 ## Roadmap (in progress)
 
-- FastAPI service
 - Docker
 - GitHub Actions CI with an evaluation regression gate
 
@@ -205,5 +424,5 @@ All OpenAI-hitting logic is mocked in tests; only `eval.py` and the
   multiple share classes.
 - **No judge calibration** — RAG triad scores come from an LLM judge
   (`gpt-4.1-mini`) with no calibration against hand-labeled ground truth.
-- **Not deployed** — no API endpoint or containerization; this is a local
-  CLI pipeline only, by design for this project phase.
+- **Not deployed** — the FastAPI service runs locally only; no
+  containerization or hosting yet, and no auth on the API.

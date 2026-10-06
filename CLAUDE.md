@@ -60,8 +60,9 @@ out of scope for now" section unless asked.
 ## Explicitly out of scope for now (do not build unless asked)
 - Reranker (cross-encoder re-ranking of retrieved chunks).
 - Judge calibration against hand-labeled data.
-- Deployment: FastAPI endpoint, Docker packaging. NOT being built in this
-  project phase at all — do not scaffold this.
+- Deployment: Docker packaging. NOT being built in this project phase at
+  all — do not scaffold this. (A local FastAPI service, `api.py`, was added
+  later — see NOTES.md Step 8.)
 
 ## Rate limit awareness
 OpenAI's API is billed per token, and both ingestion and evaluation can add

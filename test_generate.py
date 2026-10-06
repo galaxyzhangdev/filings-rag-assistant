@@ -31,6 +31,7 @@ with patch("generate.retrieve", return_value=fake_chunks), \
 
 assert result["answer"] == "Micron's revenue was $37.4 billion."
 assert "Revenue was $37.4 billion." in result["context"]
+assert result["chunks"] == fake_chunks
 assert result["usage"]["total_tokens"] == 50
 assert result["latency"] >= 0
 print("ok")
