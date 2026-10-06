@@ -522,3 +522,61 @@ Each one ran on a throwaway branch (since deleted), with the eval gate triggered
 
 - **Next step (not built)** — a reference-based check, such as expected figures for factual questions or "both companies present in the context" for cross-company questions, would catch this class of bug directly.
   > 中文：下一步（尚未实现）：加入基于参考答案的检查，比如事实类问题的预期数字、跨公司问题要求上下文里同时出现两家公司，就能直接抓到这类 bug。
+
+## Step 11: Review fixes (empty lookup, timeouts, latency, streaming)
+
+### How this step works
+
+**`filings.py` -> `get_latest_10k_filings(ticker, count=2)`**
+1. Same as Step 1, up to the end of the loop over the filing history.
+   > 中文：前面和第一步一样，直到遍历完文件历史记录。
+2. If no 10-K was found (e.g. a foreign company that files a 20-F instead), raise a `ValueError` instead of returning an empty list.
+   > 中文：如果一份 10-K 都没找到（比如提交 20-F 而不是 10-K 的外国公司），就抛出 `ValueError`，而不是返回空列表。
+3. Because it raises before `ingest_ticker` writes its cache file, a bad ticker no longer leaves an empty `[]` cache behind. That empty cache used to make embedding fail on every later run until the file was deleted by hand.
+   > 中文：因为报错发生在 `ingest_ticker` 写缓存文件之前，错误的股票代码不会再留下一个空的 `[]` 缓存。以前这个空缓存会让之后每次向量化都失败，只能手动删除文件。
+
+**`filings.py`, `ingest.py`, `embed.py`, `generate.py` -> every `requests.get` / `requests.post` call**
+1. Each call now passes `timeout=60`, so a connection to SEC or OpenAI that stops responding raises `requests.Timeout` instead of waiting forever.
+   > 中文：每次请求现在都带上 `timeout=60`，如果和 SEC 或 OpenAI 的连接卡住不响应，会抛出 `requests.Timeout`，而不是永远等下去。
+2. `requests.Timeout` is a kind of `requests.RequestException`, so in the API it becomes the same fixed 502 as any other upstream failure, with no extra code.
+   > 中文：`requests.Timeout` 属于 `requests.RequestException`，所以在 API 里它会和其他上游错误一样变成固定的 502 响应，不需要额外写代码。
+
+**`generate.py` -> `_build_prompt(question, top_k, method, tickers)`**
+1. Retrieve the top chunks with `retrieve(...)`, using the given method and tickers.
+   > 中文：用指定的检索方法和股票代码，调用 `retrieve(...)` 取回最相关的分块。
+2. Join them into one context string, each chunk labeled with its ticker and filing year.
+   > 中文：把这些分块拼成一段上下文文字，每个分块前面标注股票代码和申报年份。
+3. Build the system + user messages and return `(chunks, context, messages)`. Both `answer()` and `print_answer_streaming()` call this, so they always send the model the same prompt.
+   > 中文：组装 system 和 user 两条消息，返回 `(chunks, context, messages)`。`answer()` 和 `print_answer_streaming()` 都调用这个函数，所以两者发给模型的提示词永远一致。
+
+**`generate.py` -> `answer(question, top_k=5, method="vector", tickers=("GOOGL", "MU"))`**
+1. Start the timer first, before retrieval.
+   > 中文：先开始计时，在检索之前。
+2. Build the prompt with `_build_prompt`, call the chat API, and stop the timer when the response arrives.
+   > 中文：用 `_build_prompt` 构建提示词，调用对话接口，收到响应后停止计时。
+3. Return the same fields as before, except `latency` now covers retrieval + generation (end to end), not just the chat call.
+   > 中文：返回的字段和之前一样，只是 `latency` 现在包含检索加生成（端到端），而不只是调用对话接口的时间。
+
+**`generate.py` -> `print_answer_streaming(question, top_k=5, method="vector", tickers=("GOOGL", "MU"))`**
+1. Build the prompt with the same `_build_prompt` as `answer()`, so `method` and `tickers` are now respected too.
+   > 中文：用和 `answer()` 相同的 `_build_prompt` 构建提示词，所以现在也会遵循 `method` 和 `tickers` 参数。
+2. Call the chat API with `"stream": True`, so the answer arrives in small pieces while it's being generated.
+   > 中文：调用对话接口时带上 `"stream": True`，这样答案在生成过程中就会一小段一小段地返回。
+3. Read the response line by line: skip empty lines, stop at `data: [DONE]`, and parse each `data: {...}` line as JSON.
+   > 中文：逐行读取响应：跳过空行，遇到 `data: [DONE]` 就停止，把每一行 `data: {...}` 解析成 JSON。
+4. Print each piece of text (`delta.content`) as soon as it arrives. The old artificial 20 ms per-character delay is gone.
+   > 中文：每收到一段文字（`delta.content`）就立刻打印出来。以前人为加的每个字符 20 毫秒延迟已经去掉了。
+
+### Terms
+
+- **Request timeout (`timeout=60`)** — the longest `requests` will wait for a server to connect or send data before giving up with an error.
+  > 中文：请求超时（`timeout=60`）是 `requests` 等待服务器建立连接或返回数据的最长时间，超过就报错。不设置的话，一个卡住的连接会让程序永远等下去；在 API 里这会一直占用一个工作线程。
+
+- **Poisoned cache** — a cache entry that stores a failed or empty result, so every later run reuses the bad result instead of trying again.
+  > 中文：“中毒”的缓存是指缓存里存了一个失败或空的结果，之后每次运行都直接用这个坏结果，而不会重新尝试。解决办法是出错时直接报错，不把空结果写进缓存。
+
+- **Streaming response (server-sent events)** — with `"stream": True`, OpenAI sends the answer as a series of `data: {...}` lines while it's being generated, ending with `data: [DONE]`.
+  > 中文：流式响应（server-sent events）：设置 `"stream": True` 后，OpenAI 会在生成答案的过程中一行一行地发送 `data: {...}`，最后以 `data: [DONE]` 结束。这样用户不用等整段答案生成完，就能先看到文字。
+
+- **End-to-end latency** — time measured from the start of the whole request to its end (here: retrieval + generation), as opposed to timing a single step like the model call.
+  > 中文：端到端延迟是从整个请求开始到结束的总耗时（这里是检索加生成），而不是只测其中一步（比如只测调用模型的时间）。它更接近用户实际等待的时间。

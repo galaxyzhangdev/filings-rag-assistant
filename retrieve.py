@@ -13,6 +13,7 @@ CANDIDATES = 20  # per-ticker candidates taken from each of vector search and BM
 # for comparison -- see NOTES.md / INTERVIEW_NOTES.md Step 4 for what broke and why. In short: for
 # cross-company questions, a single global ranking could be dominated by one ticker's chunks, so the
 # other company's data sometimes never made the cut.
+# Reference only, no longer runnable: embed_ticker() no longer returns chunks with embeddings, and numpy isn't imported.
 #
 # def retrieve(question: str, tickers: tuple[str, ...] = DEFAULT_TICKERS, top_k: int = 5) -> list[dict]:
 #     """Embed the question and return the top_k most similar chunks (by cosine similarity) across the given tickers."""
@@ -35,6 +36,7 @@ CANDIDATES = 20  # per-ticker candidates taken from each of vector search and BM
 # Previous version: per-ticker top_k, but computed by hand with numpy against every chunk's embedding
 # loaded from the JSON cache. Kept here, commented out, for comparison -- see NOTES.md /
 # INTERVIEW_NOTES.md Step 4 "Before vs. after" for why this was upgraded to Chroma.
+# Reference only, no longer runnable: embed_ticker() no longer returns chunks with embeddings, and numpy isn't imported.
 #
 # def retrieve(question: str, tickers: tuple[str, ...] = DEFAULT_TICKERS, top_k: int = 5) -> list[dict]:
 #     """Embed the question and return the top_k most similar chunks (by cosine similarity) for each ticker."""

@@ -9,7 +9,7 @@ data, no confidential information.
 
 Ask questions like *"Which company had higher revenue, Alphabet or
 Micron?"* and get an answer grounded in the actual filing text, with the
-retrieved excerpts and cost/latency tracked.
+retrieved excerpts, token usage, and latency tracked.
 
 ## Architecture
 
@@ -217,6 +217,9 @@ usage, and latency.
   never the raw exception, which can carry request URLs or headers.
 - The handler is a plain `def`, not `async`, so FastAPI runs the blocking
   OpenAI calls in its threadpool instead of stalling the event loop.
+- `latency` covers retrieval + generation, end to end. Latencies recorded
+  before that change (the JSON samples in this README, and answers cached
+  in `data/eval_cache.json`) measured the chat call only.
 
 ### The cross-company retrieval bug, and how eval caught it
 
@@ -271,7 +274,7 @@ See "Hybrid retrieval" above for the latest vector-vs-hybrid results.
 
 - Python 3.12, `uv` for environment/dependency management
 - `requests` + `beautifulsoup4` — fetch and parse SEC filing HTML
-- `tiktoken` — token-based chunking (~500 tokens, with overlap) and cost tracking
+- `tiktoken` — token-based chunking (~500 tokens, with overlap); token usage comes from each OpenAI response's `usage` field
 - OpenAI API (`OPENAI_API_KEY`):
   - Chat: `gpt-4.1-mini` (generation + LLM-as-judge)
   - Embeddings: `text-embedding-3-small`
@@ -466,8 +469,11 @@ Three GitHub Actions jobs in two workflows:
   `chroma-v1-<hash of filings.py, ingest.py, embed.py, uv.lock>`, so SEC
   download + embedding (~$0.01) only re-runs when one of those changes, the
   cache is evicted (7 days unused), or `v1` is bumped to pick up newly filed
-  10-Ks. The index is saved right after it's built, so a red gate doesn't
-  discard it. The answer cache (`data/eval_cache.json`) is never cached in CI.
+  10-Ks. Any rebuild, for whichever reason, fetches the *latest* 10-Ks, so
+  once a company files a new one, CI scores different filings than the local
+  `data/` behind the numbers in this README. The index is saved right after
+  it's built, so a red gate doesn't discard it. The answer cache
+  (`data/eval_cache.json`) is never cached in CI.
 - The workflows use `permissions: contents: read`, and the secret is passed
   only to the two steps that call OpenAI.
 
@@ -513,8 +519,10 @@ differed.
   re-ranked by a cross-encoder.
 - **`year` is the filing year, not the fiscal year** — labels are
   inconsistent across companies (Alphabet's FY2025 10-K is tagged 2026,
-  Micron's FY2025 10-K is tagged 2025). Not fixed yet, since that would
-  require re-embedding and break comparability with the baselines above.
+  Micron's FY2025 10-K is tagged 2025). Not fixed yet, because changing the
+  label changes the answers and breaks comparability with the baselines
+  above. It wouldn't need re-embedding: only the prompt label or the Chroma
+  metadata would change, not the vectors.
 - **No citation mechanism** — the generated answer doesn't point back to
   which retrieved chunk it came from; a user can't easily verify it
   against the source filing without reading the printed context.

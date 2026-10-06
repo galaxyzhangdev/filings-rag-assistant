@@ -25,7 +25,8 @@ jobs:
 
       # Chroma index keyed on everything that shapes it: which filings (filings.py), chunking (ingest.py),
       # embedding/storage (embed.py), and library versions incl. chromadb's on-disk format (uv.lock).
-      # Bump v1 to force a rebuild, e.g. to pick up a newly filed 10-K.
+      # Bump v1 to force a rebuild, e.g. to pick up a newly filed 10-K. Any rebuild (key change or cache
+      # eviction too) fetches the latest 10-Ks, so a new filing changes what CI scores vs. the README baselines.
       - name: Restore Chroma index
         id: chroma
         uses: actions/cache/restore@v6

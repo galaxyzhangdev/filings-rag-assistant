@@ -58,6 +58,7 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
 # Previous version: embeddings stored back into the ticker's chunk JSON file (a local .json cache),
 # checked via an "embedding" field on the first chunk. Kept here, commented out, for comparison -- see
 # NOTES.md / INTERVIEW_NOTES.md Step 3 for why this was upgraded to Chroma.
+# Reference only, not runnable as-is: it needs json and ingest's DATA_DIR, which this file no longer imports.
 #
 # def embed_ticker(ticker: str) -> list[dict]:
 #     """Return a ticker's chunks with embeddings added, embedding and caching them only if not already done."""

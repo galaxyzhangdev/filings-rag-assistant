@@ -40,7 +40,7 @@ out of scope for now" section unless asked.
 3. **Embedding**: embed each chunk using OpenAI's `text-embedding-3-small`
    (same `OPENAI_API_KEY` used for chat). Store embeddings in **Chroma**, a
    local embedded vector database (no server), persisted to disk.
-4. **Retrieval**: vector search only — embed the question, query Chroma for
+4. **Retrieval**: vector search — embed the question, query Chroma for
    the top-k most similar chunks per ticker, and merge results across
    tickers. Vector is the default; an optional `method="hybrid"`
    (BM25 + vector, fused with RRF) was added later (see NOTES.md Step 7).
@@ -56,6 +56,10 @@ out of scope for now" section unless asked.
      answer relevance. Use **Arize Phoenix** for this.
    - Track token cost and latency per question (basic — print/log per
      call, no need for formal p95 statistics at this stage).
+
+Added later, on request (beyond the core list above): hybrid retrieval
+(NOTES.md Step 7), FastAPI service (Step 8), Docker image (Step 9), and
+GitHub Actions CI with an eval gate (Step 10).
 
 ## Explicitly out of scope for now (do not build unless asked)
 - Reranker (cross-encoder re-ranking of retrieved chunks).
@@ -76,7 +80,8 @@ under control:
 ## Tech stack
 - Python 3.12, `uv` for environment/dependency management.
 - `requests` + `beautifulsoup4` for fetching and parsing SEC filings.
-- `tiktoken` for token-based chunking and cost tracking.
+- `tiktoken` for token-based chunking (token usage for cost tracking comes
+  from the OpenAI response's `usage` field).
 - LLM + embeddings via OpenAI API (`OPENAI_API_KEY` env var):
   - Chat: `gpt-4.1-mini`
   - Embeddings: `text-embedding-3-small`
