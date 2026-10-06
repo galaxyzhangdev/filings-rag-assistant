@@ -44,6 +44,7 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
                 "https://api.openai.com/v1/embeddings",
                 headers=OPENAI_HEADERS,
                 json={"model": "text-embedding-3-small", "input": batch},
+                timeout=60,
             )
             if resp.status_code == 429 and attempt < MAX_RETRIES - 1:
                 time.sleep(float(resp.headers.get("Retry-After", 5)))

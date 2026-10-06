@@ -40,7 +40,7 @@ def ingest_ticker(ticker: str) -> list[dict]:
 
     chunks = []
     for filing in get_latest_10k_filings(ticker):
-        resp = requests.get(filing["document_url"], headers=HEADERS)
+        resp = requests.get(filing["document_url"], headers=HEADERS, timeout=60)
         resp.raise_for_status()
         text = extract_text(resp.text)
         for piece in chunk_text(text):

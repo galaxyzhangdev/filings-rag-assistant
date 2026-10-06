@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: [retrieve.py, generate.py, embed.py, ingest.py, eval.py, .github/workflows/eval.yml]
+    paths: [filings.py, ingest.py, embed.py, retrieve.py, generate.py, eval.py, uv.lock, .github/workflows/eval.yml]
 
 permissions:
   contents: read

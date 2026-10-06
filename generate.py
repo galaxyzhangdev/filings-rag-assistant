@@ -14,27 +14,39 @@ SYSTEM_PROMPT = (
 )
 
 
+def _build_prompt(
+    question: str, top_k: int, method: str, tickers: tuple[str, ...]
+) -> tuple[list[dict], str, list[dict]]:
+    """Retrieve chunks for a question and build the chat messages; returns (chunks, context, messages).
+
+    Shared by answer() and print_answer_streaming() so both send the model exactly the same prompt.
+    """
+    chunks = retrieve(question, tickers=tickers, top_k=top_k, method=method)
+    context = "\n\n".join(f"[{c['ticker']} {c['year']}]\n{c['text']}" for c in chunks)
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": f"Excerpts:\n{context}\n\nQuestion: {question}"},
+    ]
+    return chunks, context, messages
+
+
 def answer(
     question: str, top_k: int = 5, method: str = "vector", tickers: tuple[str, ...] = DEFAULT_TICKERS
 ) -> dict:
     """Retrieve relevant filing chunks, stuff them into a prompt, and call gpt-4.1-mini for an answer.
 
     Returns the answer text along with the retrieved context (as one prompt string and as the raw chunk
-    list), token usage, and latency, so callers (evaluation, the API) can score and log the full round trip.
+    list), token usage, and latency (retrieval + generation), so callers (evaluation, the API) can score
+    and log the full round trip.
     `method` picks the retrieval method ("vector" or "hybrid"); `tickers` picks which companies to search.
     """
-    chunks = retrieve(question, tickers=tickers, top_k=top_k, method=method)
-    context = "\n\n".join(f"[{c['ticker']} {c['year']}]\n{c['text']}" for c in chunks)
-
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"Excerpts:\n{context}\n\nQuestion: {question}"},
-    ]
     start = time.monotonic()
+    chunks, context, messages = _build_prompt(question, top_k, method, tickers)
     resp = requests.post(
         "https://api.openai.com/v1/chat/completions",
         headers=OPENAI_HEADERS,
         json={"model": "gpt-4.1-mini", "messages": messages},
+        timeout=60,
     )
     latency = time.monotonic() - start
     resp.raise_for_status()
@@ -49,20 +61,17 @@ def answer(
     }
 
 
-def print_answer_streaming(question: str, top_k: int = 5, delay: float = 0.02) -> None:
-    """Like answer(), but prints the response token-by-token as it streams in (CLI use only)."""
-    chunks = retrieve(question, top_k=top_k)
-    context = "\n\n".join(f"[{c['ticker']} {c['year']}]\n{c['text']}" for c in chunks)
-
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"Excerpts:\n{context}\n\nQuestion: {question}"},
-    ]
+def print_answer_streaming(
+    question: str, top_k: int = 5, method: str = "vector", tickers: tuple[str, ...] = DEFAULT_TICKERS
+) -> None:
+    """Like answer(), but prints the response as it streams in from the API (CLI use only)."""
+    _, _, messages = _build_prompt(question, top_k, method, tickers)
     resp = requests.post(
         "https://api.openai.com/v1/chat/completions",
         headers=OPENAI_HEADERS,
         json={"model": "gpt-4.1-mini", "messages": messages, "stream": True},
         stream=True,
+        timeout=60,
     )
     resp.raise_for_status()
     for line in resp.iter_lines(decode_unicode=True):
@@ -73,9 +82,7 @@ def print_answer_streaming(question: str, top_k: int = 5, delay: float = 0.02) -
             break
         delta = json.loads(payload)["choices"][0]["delta"].get("content")
         if delta:
-            for ch in delta:
-                print(ch, end="", flush=True)
-                time.sleep(delay)
+            print(delta, end="", flush=True)
     print()
 
 

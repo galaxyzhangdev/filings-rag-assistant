@@ -26,7 +26,7 @@ class FakeResponse:
         }
 
 
-def fake_post(url, headers, json):
+def fake_post(url, headers, json, timeout):
     # Confirm the retrieved chunk's text and the question both made it into the prompt sent to the API.
     sent_text = json["messages"][1]["content"]
     assert "Revenue was $37.4 billion." in sent_text

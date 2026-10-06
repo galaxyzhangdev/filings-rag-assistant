@@ -28,7 +28,7 @@ class FakeResponse:
         return {"data": [{"embedding": [0.0, 0.0]} for _ in range(self._n)]}
 
 
-def fake_post(url, headers, json):
+def fake_post(url, headers, json, timeout):
     return FakeResponse(len(json["input"]))
 
 

@@ -407,7 +407,7 @@ An unknown ticker returns
 
 ```bash
 docker build -t filings-rag .
-docker run -p 8000:8000 --env-file .env -v "$(pwd)/data:/app/data" filings-rag
+docker run -p 127.0.0.1:8000:8000 --env-file .env -v "$(pwd)/data:/app/data" filings-rag
 # or, equivalently:
 docker compose up --build
 ```
@@ -443,7 +443,7 @@ Three GitHub Actions jobs in two workflows:
 |---|---|---|---|
 | `tests` — every `test_*.py` except `test_filings.py` (hits SEC live) | `ci.yml` | every push and pull request | free |
 | `docker` — `docker build .` to prove the image builds | `ci.yml` | every push and pull request | free |
-| `eval` — RAG-triad regression gate | `eval.yml` | manual dispatch, or push to `main` that changes `retrieve.py`, `generate.py`, `embed.py`, `ingest.py`, `eval.py`, or the eval workflow itself | ~$0.12–0.15 per run |
+| `eval` — RAG-triad regression gate | `eval.yml` | manual dispatch, or push to `main` that changes `filings.py`, `ingest.py`, `embed.py`, `retrieve.py`, `generate.py`, `eval.py`, `uv.lock`, or the eval workflow itself | ~$0.12–0.15 per run |
 
 - **`tests` needs no secrets and no data.** Every OpenAI call is mocked,
   the key is a dummy, and Chroma points at a throwaway temp directory
