@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import eval as eval_module
 
-test_cache_path = Path("data/test_eval_cache.json")
+test_cache_path = Path(_chroma_dir.name) / "test_eval_cache.json"
 fake_result = {"answer": "42", "context": "ctx", "usage": {"total_tokens": 10}, "latency": 0.1}
 
 with patch.object(eval_module, "CACHE_PATH", test_cache_path), \
@@ -31,8 +31,6 @@ with patch.object(eval_module, "CACHE_PATH", test_cache_path), \
 
 assert first == second == fake_result
 assert test_cache_path.exists()
-
-test_cache_path.unlink()
 
 # --no-cache (use_cache=False) regenerates even when the question is already cached, and never touches the file.
 no_cache_path = Path(_chroma_dir.name) / "eval_cache.json"
