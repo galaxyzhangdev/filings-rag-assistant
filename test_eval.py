@@ -12,9 +12,14 @@ with patch.object(eval_module, "CACHE_PATH", test_cache_path), \
     cache = {}
     first = eval_module.get_cached_answer("some question", cache)
     second = eval_module.get_cached_answer("some question", cache)
+    assert mock_answer.call_count == 1  # second call should hit the cache, not regenerate
+
+    # A different retrieval method must not reuse the vector entry.
+    eval_module.get_cached_answer("some question", cache, method="hybrid")
+    assert mock_answer.call_count == 2
+    assert set(cache) == {"vector::some question", "hybrid::some question"}
 
 assert first == second == fake_result
-assert mock_answer.call_count == 1  # second call should hit the cache, not regenerate
 assert test_cache_path.exists()
 
 test_cache_path.unlink()

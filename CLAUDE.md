@@ -42,7 +42,8 @@ out of scope for now" section unless asked.
    local embedded vector database (no server), persisted to disk.
 4. **Retrieval**: vector search only — embed the question, query Chroma for
    the top-k most similar chunks per ticker, and merge results across
-   tickers. No BM25, no hybrid retrieval for now.
+   tickers. Vector is the default; an optional `method="hybrid"`
+   (BM25 + vector, fused with RRF) was added later (see NOTES.md Step 7).
 5. **Generation**: take the user's question, retrieve top-k chunks, stuff
    them into a prompt, call OpenAI's `gpt-4.1-mini` for the answer.
 6. **Evaluation** (on Alphabet + Micron only):
@@ -57,7 +58,6 @@ out of scope for now" section unless asked.
      call, no need for formal p95 statistics at this stage).
 
 ## Explicitly out of scope for now (do not build unless asked)
-- Hybrid retrieval (BM25 keyword search combined with vector search).
 - Reranker (cross-encoder re-ranking of retrieved chunks).
 - Judge calibration against hand-labeled data.
 - Deployment: FastAPI endpoint, Docker packaging. NOT being built in this

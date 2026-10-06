@@ -1,4 +1,5 @@
 """Run the hand-written eval set through the RAG pipeline and score it with the RAG triad via Phoenix."""
+import argparse
 import json
 from pathlib import Path
 
@@ -8,7 +9,6 @@ from phoenix.evals.metrics import FaithfulnessEvaluator, RetrievalRelevanceEvalu
 from generate import answer
 
 CACHE_PATH = Path("data/eval_cache.json")
-RETRIEVAL_METHOD = "vector"  # only retrieval method built so far; kept in the cache key for future methods
 
 # Hand-written eval set on Alphabet (GOOGL) and Micron (MU) only, per project scope.
 EVAL_SET = [
@@ -32,6 +32,17 @@ EVAL_SET = [
     {"question": "What is Micron's stance on cryptocurrency investment?", "category": "should_abstain"},
 ]
 
+# Separate keyword_exact set (exact figures / specific terms), reported apart from the original 18 above.
+# Written from chunks actually stored in Chroma; see NOTES.md Step 7.
+KEYWORD_EVAL_SET = [
+    {"question": "By what percentage did Micron's CMBU revenue increase in fiscal 2025 compared to 2024?", "category": "keyword_exact"},
+    {"question": "What is the interest rate on Micron's 2029 B Notes?", "category": "keyword_exact"},
+    {"question": "On which DRAM node was the majority of Micron's 2025 DRAM bit production?", "category": "keyword_exact"},
+    {"question": "By how much did Alphabet's Google Cloud revenues increase from 2024 to 2025?", "category": "keyword_exact"},
+    {"question": "How many shares did Alphabet repurchase in 2025, and for how much?", "category": "keyword_exact"},
+    {"question": "What is the name of Alphabet's seventh-generation TPU?", "category": "keyword_exact"},
+]
+
 
 def _load_cache() -> dict:
     """Load cached (question, retrieval method) -> answer results, if any exist."""
@@ -46,11 +57,11 @@ def _save_cache(cache: dict) -> None:
     CACHE_PATH.write_text(json.dumps(cache, indent=2))
 
 
-def get_cached_answer(question: str, cache: dict) -> dict:
+def get_cached_answer(question: str, cache: dict, method: str = "vector") -> dict:
     """Return the cached answer for (question, retrieval method) if present, else generate and cache it."""
-    cache_key = f"{RETRIEVAL_METHOD}::{question}"
+    cache_key = f"{method}::{question}"
     if cache_key not in cache:
-        cache[cache_key] = answer(question)
+        cache[cache_key] = answer(question, method=method)
         _save_cache(cache)
     return cache[cache_key]
 
@@ -69,8 +80,8 @@ def build_answer_relevance_evaluator(llm: LLM):
     )
 
 
-def run_eval() -> list[dict]:
-    """Run every eval question through the RAG pipeline (cached) and score it with the RAG triad."""
+def run_eval(method: str = "vector", eval_set: list[dict] = EVAL_SET) -> list[dict]:
+    """Run every eval question through the RAG pipeline (cached per method) and score it with the RAG triad."""
     cache = _load_cache()
     llm = LLM(provider="openai", model="gpt-4.1-mini")
     context_relevance_eval = RetrievalRelevanceEvaluator(llm=llm)
@@ -78,9 +89,9 @@ def run_eval() -> list[dict]:
     answer_relevance_eval = build_answer_relevance_evaluator(llm)
 
     results = []
-    for item in EVAL_SET:
+    for item in eval_set:
         question, category = item["question"], item["category"]
-        result = get_cached_answer(question, cache)
+        result = get_cached_answer(question, cache, method)
         eval_input = {"input": question, "output": result["answer"], "context": result["context"]}
 
         context_score = context_relevance_eval.evaluate(eval_input)[0]
@@ -112,11 +123,15 @@ def run_eval() -> list[dict]:
 
 
 if __name__ == "__main__":
-    eval_results = run_eval()
+    parser = argparse.ArgumentParser(description="Run the RAG triad eval for one retrieval method and eval set.")
+    parser.add_argument("--method", choices=("vector", "hybrid"), default="vector")
+    parser.add_argument("--set", dest="eval_set", choices=("core", "keyword_exact"), default="core")
+    args = parser.parse_args()
+    eval_results = run_eval(args.method, EVAL_SET if args.eval_set == "core" else KEYWORD_EVAL_SET)
 
     total_tokens = sum(r["tokens"] for r in eval_results)
     total_latency = sum(r["latency"] for r in eval_results)
-    print(f"{len(eval_results)} questions | total tokens: {total_tokens} | total latency: {total_latency:.1f}s")
+    print(f"[{args.method} / {args.eval_set}] {len(eval_results)} questions | total tokens: {total_tokens} | total latency: {total_latency:.1f}s")
     for metric in ("context_relevance", "groundedness", "answer_relevance"):
         avg = sum(r[metric] for r in eval_results) / len(eval_results)
         print(f"avg {metric}: {avg:.2f}")

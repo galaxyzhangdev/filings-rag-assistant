@@ -14,13 +14,14 @@ SYSTEM_PROMPT = (
 )
 
 
-def answer(question: str, top_k: int = 5) -> dict:
+def answer(question: str, top_k: int = 5, method: str = "vector") -> dict:
     """Retrieve relevant filing chunks, stuff them into a prompt, and call gpt-4.1-mini for an answer.
 
     Returns the answer text along with the retrieved context, token usage, and latency,
-    so callers (e.g. evaluation) can score and log the full round trip.
+    so callers (e.g. evaluation) can score and log the full round trip. `method` picks the retrieval
+    method ("vector" or "hybrid").
     """
-    chunks = retrieve(question, top_k=top_k)
+    chunks = retrieve(question, top_k=top_k, method=method)
     context = "\n\n".join(f"[{c['ticker']} {c['year']}]\n{c['text']}" for c in chunks)
 
     messages = [

@@ -275,3 +275,67 @@ similarity by hand — is kept, commented out, in `embed.py` and `retrieve.py` f
 
 - **Caching LLM answers per (question, retrieval method)** — storing each generated answer keyed by both the question text and which retrieval method produced its context, so re-running the eval script (e.g. after changing an evaluator) doesn't re-spend money regenerating unchanged answers.
   > 中文：按照"问题 + 检索方法"这个组合来缓存每次生成的答案，这样以后重新跑评测脚本（比如只是改了评分逻辑）时，不会为没有变化的问题重新花钱生成答案。
+
+## Step 7: Hybrid retrieval
+
+### How this step works
+
+**`retrieve.py` -> `retrieve(question, tickers=("GOOGL", "MU"), top_k=5, method="hybrid")`**
+1. Check that `method` is `"vector"` or `"hybrid"`, and raise an error for anything else.
+   > 中文：先检查 `method` 是不是 `"vector"` 或 `"hybrid"`，如果是其他值就直接报错。
+2. Make sure every ticker's chunks are embedded and stored in Chroma (`embed_ticker`), then embed the question once.
+   > 中文：确保每个股票代码的分块都已经生成向量并存进 Chroma（`embed_ticker`），然后把问题转成向量（只做一次）。
+3. For each ticker separately, ask Chroma for the 20 closest chunk ids by vector similarity.
+   > 中文：对每个股票代码单独处理：向 Chroma 查询向量相似度最高的 20 个分块的 id。
+4. Get that ticker's BM25 index (`_bm25_index`), score every chunk against the tokenized question, and keep the top 20 chunk ids that have a score above 0.
+   > 中文：取出该股票代码的 BM25 索引（`_bm25_index`），用分词后的问题给每个分块打分，保留得分大于 0 的前 20 个分块 id。
+5. Fuse the two ranked id lists with `rrf_fuse`, keep the top `top_k`, and look up each chunk's text, ticker, and year.
+   > 中文：用 `rrf_fuse` 把两个排好序的 id 列表融合，保留前 `top_k` 个，再查出每个分块的文字、股票代码和年份。
+6. Merge every ticker's results, sort them by RRF score (highest first), and return them in the same shape as vector search.
+   > 中文：合并所有股票代码的结果，按 RRF 分数从高到低排序后返回，返回格式和纯向量检索完全一样。
+
+**`retrieve.py` -> `_bm25_index(ticker)`**
+1. If this ticker's index is already in the in-memory cache, return it.
+   > 中文：如果这个股票代码的索引已经在内存缓存里，直接返回。
+2. Otherwise, load all of that ticker's chunks (ids, text, metadata) from Chroma with `collection.get`.
+   > 中文：否则，用 `collection.get` 从 Chroma 读出这个股票代码的全部分块（id、文字、元数据）。
+3. Tokenize every chunk and build a `BM25Okapi` index from the token lists.
+   > 中文：把每个分块分词，用这些词列表建立一个 `BM25Okapi` 索引。
+4. Cache the index together with the ids, texts, and metadata, then return them.
+   > 中文：把索引和 id、文字、元数据一起放进缓存，然后返回。
+
+**`retrieve.py` -> `tokenize(text)`**
+1. Lowercase the text, then split it into word tokens with `re.findall(r"\w+")`, so numbers ("257") and terms ("hbm") each become their own token.
+   > 中文：把文字转成小写，再用 `re.findall(r"\w+")` 切成单词，这样数字（比如 "257"）和术语（比如 "hbm"）都会成为独立的词。
+
+**`retrieve.py` -> `rrf_fuse(rank_lists, k=60)`**
+1. For every ranked list, give each chunk id `1 / (k + rank)` points, where rank starts at 1.
+   > 中文：对每个排好序的列表，给每个分块 id 加上 `1 / (k + 排名)` 分（排名从 1 开始）。
+2. Add up each id's points across all lists, so an id that appears in both lists gets points twice.
+   > 中文：把同一个 id 在所有列表里的得分加起来，所以同时出现在两个列表里的 id 会得到两次分数。
+3. Return `(id, score)` pairs sorted from highest to lowest score.
+   > 中文：返回按分数从高到低排序的 `(id, 分数)` 列表。
+
+**`eval.py` -> `run_eval(method="vector", eval_set=EVAL_SET)`**
+1. Same as Step 6, except the retrieval method and question set are now parameters (`--method`, `--set` on the command line), and the cache key is `"<method>::<question>"`, so vector and hybrid answers never overwrite each other.
+   > 中文：和第六步一样，只是检索方法和题目集变成了参数（命令行用 `--method`、`--set` 指定），缓存键变成 `"方法::问题"`，所以向量检索和混合检索的答案不会互相覆盖。
+
+### Terms
+
+- **BM25** — a classic keyword-search scoring formula: a chunk scores higher when it contains the question's words, especially rare ones, with diminishing returns for repeats and a penalty for very long chunks.
+  > 中文：BM25 是一种经典的关键词检索打分公式：分块里出现问题中的词越多，分数越高，尤其是稀有的词；同一个词重复很多次的收益会递减，太长的分块会被扣分。它擅长精确匹配，比如数字和专有名词。
+
+- **Hybrid retrieval** — running keyword search (BM25) and semantic search (vectors) side by side and combining their results, so a chunk can be found either by meaning or by exact wording.
+  > 中文：混合检索是同时跑关键词检索（BM25）和语义检索（向量），再把结果合并。这样一个分块既可以靠"意思相近"被找到，也可以靠"字面完全匹配"被找到。
+
+- **Reciprocal Rank Fusion (RRF)** — a way to merge several ranked lists using only the positions (ranks), not the raw scores: each item gets `1/(60 + rank)` from each list it appears in, summed up.
+  > 中文：RRF（倒数排名融合）是一种合并多个排序列表的方法，只看名次、不看原始分数：每个条目在它出现的每个列表里得到 `1/(60 + 名次)` 分，再加总。因为 BM25 分数和余弦相似度的量纲完全不同，只用名次就不需要做分数归一化。
+
+- **Tokenizer** — the function that splits text into the words BM25 matches on. Here: lowercase, then `\w+` (runs of letters, digits, and underscores).
+  > 中文：分词器（tokenizer）是把文字切成单词的函数，BM25 就是拿这些词去做匹配。这里的做法是先转小写，再用 `\w+`（连续的字母、数字、下划线）切分。注意 "$37.4" 会被切成 "37" 和 "4"，但问题和分块用的是同一种切法，所以仍然能匹配上。
+
+- **Lazy in-memory index** — the BM25 index isn't saved to disk. It's built the first time a ticker is searched, then kept in a Python dict for the rest of the process.
+  > 中文：懒加载的内存索引：BM25 索引不保存到磁盘，而是在第一次检索某个股票代码时才建立，之后在整个程序运行期间都保存在一个 Python 字典里。约 400 个分块建索引只需要很短时间，所以不值得额外做持久化。
+
+- **Reference-free metric blind spot** — the RAG triad doesn't know the correct answer, so a wrong "I don't know" can still pass all three metrics (it's grounded and on-topic). Checking against expected answers catches this.
+  > 中文：无参考指标的盲点：RAG triad 不知道正确答案是什么，所以一个错误的"我不知道"仍然可能三项全部通过（因为它没有编造，也回应了问题）。只有拿预期答案去对比才能发现这种错误。

@@ -24,14 +24,14 @@ flowchart LR
     end
 
     subgraph "Query time"
-        F["User question"] --> G["retrieve.py<br/>embed question, query Chroma<br/>per ticker, merge top-k"]
+        F["User question"] --> G["retrieve.py<br/>per ticker: vector (Chroma) or<br/>hybrid (vector + BM25, RRF), merge top-k"]
         E --> G
         G --> H["generate.py<br/>gpt-4.1-mini + retrieved excerpts"]
         H --> I["Answer + context + usage/latency"]
     end
 
     subgraph Evaluation
-        H --> J["eval.py<br/>18-question eval set"]
+        H --> J["eval.py<br/>18-question eval set<br/>+ 6 keyword_exact"]
         J --> K["Arize Phoenix<br/>RAG triad (LLM judge: gpt-4.1-mini)"]
     end
 ```
@@ -43,20 +43,64 @@ eval set and all reported metrics below are scoped to two companies,
 
 ## Key design decisions
 
-### Vector-only retrieval, no hybrid search (yet)
+### Hybrid retrieval (BM25 + vector, RRF)
 
-Retrieval is pure vector similarity via Chroma — no BM25/keyword search,
-no reranker. At this project's scale (782 chunks), a semantic-only search
-is enough to answer most factual and comparison questions, and Chroma adds
-persistence and metadata filtering without needing a server.
+Pure vector search can miss exact figures and rare terms (e.g. "CMBU",
+"1ß", a specific dollar amount) that don't paraphrase well semantically.
+`retrieve(question, method="hybrid")` adds a keyword path next to the
+default `method="vector"`:
 
-The known gap: pure vector search misses exact keyword/number matches that
-don't paraphrase well semantically — e.g. a question naming a specific
-dollar figure might not retrieve the exact table containing it as reliably
-as a keyword match would. Hybrid retrieval (vector + BM25) would close
-this gap but is explicitly deferred (see `CLAUDE.md`, "Explicitly out of
-scope for now") until it's shown to matter on real eval failures, rather
-than added speculatively.
+- **BM25** (`rank_bm25.BM25Okapi`), one index per ticker, built lazily in
+  memory from the chunks already stored in Chroma. Tokenizer: lowercase +
+  `re.findall(r"\w+")`, so numbers and terms like "HBM" stay searchable.
+- **Per ticker**: top 20 from vector search + top 20 from BM25, fused with
+  **Reciprocal Rank Fusion** (`score = Σ 1/(60 + rank)`), keep `top_k`.
+  RRF uses only ranks, so the two very different score scales (cosine vs.
+  BM25) never need normalizing. Retrieval stays per ticker (see the
+  cross-company bug below).
+- Same return shape as vector; `score` is the RRF score (~0.016–0.033),
+  used only for ordering. Default stays `"vector"`.
+
+**Results** — vector and hybrid scored in the same run (same judge, same
+day), 18 original questions:
+
+| Metric | Vector | Hybrid |
+|---|---|---|
+| Context relevance | 0.83 | 0.78 |
+| Groundedness | 0.94 | 0.94 |
+| Answer relevance | 1.00 | 1.00 |
+| Total tokens | 97,014 | 97,070 |
+
+Historical reference (earlier run, vector): 0.83 / 1.00 / 1.00. The vector
+answers in both runs are the *same cached answers*, so its groundedness
+moving 1.00 → 0.94 is purely LLM-judge noise. The 0.05 context-relevance
+gap is one question (the "current stock price" should-abstain question,
+where irrelevant context is the expected outcome anyway) and within judge
+noise. **On the original 18 questions, hybrid does not beat vector.**
+
+**Separate `keyword_exact` set** (6 questions on exact figures/terms,
+written from chunks in Chroma; reported separately so the 18-question
+comparison is unchanged). This set favors BM25 by construction. Triad
+averages were identical (1.00 / 0.83 / 1.00 for both), so correctness
+against the expected answer is shown per question:
+
+| # | Question (expected answer) | Rare term in | Vector | Hybrid |
+|---|---|---|---|---|
+| Q1 | Micron CMBU revenue increase, FY25 vs FY24 (257%) | question | ✅ | ✅ |
+| Q2 | Micron 2029 B Notes rate (6.750%) | question | ✅ | ✅ |
+| Q3 | Node for most of Micron's 2025 DRAM bits (1ß) | answer only | ❌ "1α and 1ß" | ❌ "1α and 1ß" |
+| Q4 | Google Cloud revenue increase 2024→2025 ($15.5B) | answer only | ✅ | ✅ |
+| Q5 | Alphabet 2025 buybacks (240M shares, $45.4B) | answer only | ❌ "not disclosed" | ✅ |
+| Q6 | Alphabet 7th-gen TPU name (Ironwood) | question | ✅ | ✅ |
+
+Vector 4/6, hybrid 5/6 — a one-question difference on 6 questions, not
+statistically meaningful. Where the rare term is in the question (Q1, Q2,
+Q6), both methods got all three right. Hybrid's one extra answer (Q5) is in
+the group where the rare term is only in the answer. Both missed Q3: the
+2025 sentence wasn't retrieved, and both answered from the prior year's
+filing. Notably, the RAG triad passed vector's wrong Q5 abstention on all
+three metrics — reference-free metrics can't tell a correct "I don't know"
+from a wrong one.
 
 ### The cross-company retrieval bug, and how eval caught it
 
@@ -105,15 +149,7 @@ re-running the eval (e.g. after a judge-prompt change) doesn't re-spend
 money regenerating unchanged answers; the RAG triad scores themselves are
 always computed fresh.
 
-Latest run (18 questions, current Chroma-based retrieval):
-
-| Metric | Score |
-|---|---|
-| Context relevance | 0.83 |
-| Groundedness | 1.00 |
-| Answer relevance | 1.00 |
-
-Total: 97,014 tokens, 20.4s latency across all 18 questions.
+See "Hybrid retrieval" above for the latest vector-vs-hybrid results.
 
 ## Tech stack
 
@@ -135,7 +171,8 @@ echo "OPENAI_API_KEY=sk-..." > .env
 uv run python ingest.py     # fetch + chunk GOOGL and MU 10-Ks (cached per ticker)
 uv run python embed.py      # embed chunks into the Chroma collection (cached per ticker)
 uv run python generate.py   # interactive Q&A loop over the terminal
-uv run python eval.py       # run the 18-question eval set, print RAG triad scores
+uv run python eval.py       # run the 18-question eval set (vector), print RAG triad scores
+uv run python eval.py --method hybrid --set keyword_exact   # other method / question set
 ```
 
 Each `.py` module also has a matching `test_*.py` — plain `assert`-based
@@ -145,14 +182,18 @@ All OpenAI-hitting logic is mocked in tests; only `eval.py` and the
 
 ## Roadmap (in progress)
 
-- Hybrid retrieval (BM25 + vector, fused with reciprocal rank fusion)
 - FastAPI service
 - Docker
 - GitHub Actions CI with an evaluation regression gate
 
 ## Current limitations
 
-- **No hybrid retrieval / reranker** — see "Vector-only retrieval" above.
+- **No reranker** — hybrid retrieval exists but fused results aren't
+  re-ranked by a cross-encoder.
+- **`year` is the filing year, not the fiscal year** — labels are
+  inconsistent across companies (Alphabet's FY2025 10-K is tagged 2026,
+  Micron's FY2025 10-K is tagged 2025). Not fixed yet, since that would
+  require re-embedding and break comparability with the baselines above.
 - **No citation mechanism** — the generated answer doesn't point back to
   which retrieved chunk it came from; a user can't easily verify it
   against the source filing without reading the printed context.
