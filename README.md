@@ -143,6 +143,13 @@ scripts (no test framework), run directly with `uv run python test_X.py`.
 All OpenAI-hitting logic is mocked in tests; only `eval.py` and the
 `__main__` blocks above make real API calls.
 
+## Roadmap (in progress)
+
+- Hybrid retrieval (BM25 + vector, fused with reciprocal rank fusion)
+- FastAPI service
+- Docker
+- GitHub Actions CI with an evaluation regression gate
+
 ## Current limitations
 
 - **No hybrid retrieval / reranker** — see "Vector-only retrieval" above.
