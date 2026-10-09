@@ -4,7 +4,8 @@ import time
 
 import requests
 
-from embed import OPENAI_HEADERS
+from embed import OPENAI_HEADERS, embed_ticker, is_indexed
+from filings import find_tickers, load_companies
 from retrieve import DEFAULT_TICKERS, retrieve
 
 SYSTEM_PROMPT = (
@@ -86,11 +87,63 @@ def print_answer_streaming(
     print()
 
 
+def pick_tickers(question: str) -> tuple[str, ...]:
+    """Pick the tickers a CLI question is about, offering to index any that aren't indexed yet (CLI use only).
+
+    Falls back to DEFAULT_TICKERS when no company is detected; returns () when nothing is left to search.
+    Never guesses: an ambiguous name asks the user to pick, and indexing (paid embeddings) needs an explicit "y".
+    """
+    companies = load_companies()
+    matches = find_tickers(question, companies)
+    if not matches:
+        print(f"No company detected — searching {', '.join(DEFAULT_TICKERS)}")
+        return DEFAULT_TICKERS
+
+    titles = {c["ticker"]: c["title"] for c in companies}
+    kept, skipped = [], []
+    for phrase, candidates in matches.items():
+        # Ambiguous name: list the candidates and let the user pick; blank or invalid input skips the phrase.
+        ticker = candidates[0]
+        if len(candidates) > 1:
+            print(f'"{phrase}" matches several companies:')
+            for n, t in enumerate(candidates, 1):
+                print(f"  {n}) {t}  {titles[t]}")
+            choice = input("Pick a number (blank to skip): ").strip()
+            if not (choice.isdigit() and 1 <= int(choice) <= len(candidates)):
+                continue
+            ticker = candidates[int(choice) - 1]
+        if ticker in kept or ticker in skipped:
+            continue
+
+        # Not indexed yet: only an explicit "y" triggers the (paid) ingest + embed run.
+        if not is_indexed(ticker):
+            if input(f"{ticker} is not indexed. Index now? (~30s, < $0.01) [y/N] ").strip().lower() != "y":
+                skipped.append(ticker)
+                continue
+            try:
+                embed_ticker(ticker)
+            except ValueError as e:  # e.g. a foreign filer with no 10-K
+                print(e)
+                skipped.append(ticker)
+                continue
+        kept.append(ticker)
+
+    if not kept:
+        print("No indexed companies to search.")
+        return ()
+    if skipped:
+        print(f"Skipping {', '.join(skipped)} (not indexed) — answering from {', '.join(kept)} only.")
+    return tuple(kept)
+
+
 if __name__ == "__main__":
     while True:
         question = input("\nQuestion: ")
         if question.strip().lower() in ("exit", "quit"):
             break
+        tickers = pick_tickers(question)
+        if not tickers:
+            continue
         print("\nAnswer: ", end="")
-        print_answer_streaming(question)
+        print_answer_streaming(question, tickers=tickers)
         print()

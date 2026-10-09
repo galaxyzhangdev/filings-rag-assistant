@@ -296,6 +296,27 @@ uv run python eval.py       # run the 18-question eval set (vector), print RAG t
 uv run python eval.py --method hybrid --set keyword_exact   # other method / question set
 ```
 
+The `generate.py` CLI works out which companies a question is about, by
+ticker (`TSLA`) or by name (`Tesla`, plus a few aliases like `Google`).
+If a company isn't indexed yet, it asks before running the paid ingest and
+embed step. If no company is found, it falls back to GOOGL and MU:
+
+```
+Question: Compare Tesla and Micron
+TSLA is not indexed. Index now? (~30s, < $0.01) [y/N] n
+Skipping TSLA (not indexed) — answering from MU only.
+
+Answer: ...
+
+Question: What were the main risk factors?
+No company detected — searching GOOGL, MU
+```
+
+If a name matches more than one company (e.g. "Toro"), it lists the
+candidates and asks you to pick; it never guesses. The API doesn't detect
+companies: it still takes explicit `tickers` and returns 400 for any that
+aren't indexed.
+
 Each `.py` module also has a matching `test_*.py` — plain `assert`-based
 scripts (no test framework), run directly with `uv run python test_X.py`.
 All OpenAI-hitting logic is mocked in tests; only `eval.py` and the
@@ -532,6 +553,12 @@ differed.
 - **Exact ticker matching only** — `filings.py` matches tickers
   case-insensitively but exactly; no fallback for a renamed ticker or
   multiple share classes.
+- **Simple company detection in the CLI** — names only match when
+  capitalized ("tesla" falls back to GOOGL/MU), the alias list is tiny, and
+  the cached `data/company_tickers.json` is never refreshed, so new listings
+  aren't detected until that file is deleted. Names must match the full
+  normalized SEC title, so "Costco" (SEC: "COSTCO WHOLESALE CORP") isn't
+  detected unless it's added to `ALIASES`.
 - **No judge calibration** — RAG triad scores come from an LLM judge
   (`gpt-4.1-mini`) with no calibration against hand-labeled ground truth.
 - **Not hosted** — containerized (Docker) but not hosted anywhere; no

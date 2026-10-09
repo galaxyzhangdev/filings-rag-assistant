@@ -58,8 +58,9 @@ out of scope for now" section unless asked.
      call, no need for formal p95 statistics at this stage).
 
 Added later, on request (beyond the core list above): hybrid retrieval
-(NOTES.md Step 7), FastAPI service (Step 8), Docker image (Step 9), and
-GitHub Actions CI with an eval gate (Step 10).
+(NOTES.md Step 7), FastAPI service (Step 8), Docker image (Step 9),
+GitHub Actions CI with an eval gate (Step 10), and CLI company detection
+with on-demand indexing (Step 12).
 
 ## Explicitly out of scope for now (do not build unless asked)
 - Reranker (cross-encoder re-ranking of retrieved chunks).

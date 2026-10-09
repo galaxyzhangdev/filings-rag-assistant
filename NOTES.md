@@ -580,3 +580,63 @@ Each one ran on a throwaway branch (since deleted), with the eval gate triggered
 
 - **End-to-end latency** — time measured from the start of the whole request to its end (here: retrieval + generation), as opposed to timing a single step like the model call.
   > 中文：端到端延迟是从整个请求开始到结束的总耗时（这里是检索加生成），而不是只测其中一步（比如只测调用模型的时间）。它更接近用户实际等待的时间。
+
+## Step 12: CLI company detection with on-demand indexing
+
+### How this step works
+
+**`generate.py` -> `pick_tickers(question)`** (called by the CLI loop for each question)
+1. Load SEC's company list with `load_companies()` and find companies in the question with `find_tickers()`.
+   > 中文：用 `load_companies()` 读取 SEC 公司列表，再用 `find_tickers()` 找出问题里提到的公司。
+2. If nothing is found, print `No company detected — searching GOOGL, MU` and return the default tickers (same behavior as before).
+   > 中文：如果一个公司都没找到，打印 `No company detected — searching GOOGL, MU`，返回默认的股票代码（和以前的行为一样）。
+3. For a phrase that matches several companies, print a numbered list and ask the user to pick one. A blank or invalid answer skips that phrase, so the program never guesses.
+   > 中文：如果一个词组对应多家公司，就打印编号列表，让用户选一个。回答空白或无效时跳过这个词组，程序永远不会自己猜。
+4. For a ticker that isn't in Chroma yet, ask `Index now? [y/N]`. Only `y` calls `embed_ticker()` (download + chunk + embed, the paid part). Any other answer, or a company with no 10-K, adds the ticker to the skipped list.
+   > 中文：如果某个股票代码还没存进 Chroma，就问 `Index now? [y/N]`。只有回答 `y` 才会调用 `embed_ticker()`（下载、分块、向量化，也就是要花钱的部分）。其他回答，或者公司没有 10-K，都会把这个代码记进跳过列表。
+5. If nothing is left, print `No indexed companies to search.` and return `()`, so the CLI skips the question. If only some were skipped, print which ones were skipped and which are being used, then return the kept tickers.
+   > 中文：如果一个都不剩，打印 `No indexed companies to search.` 并返回 `()`，命令行就跳过这个问题。如果只跳过了一部分，就打印跳过了哪些、用的是哪些，然后返回保留下来的代码。
+
+**`filings.py` -> `load_companies()`**
+1. If `data/company_tickers.json` doesn't exist, download it from SEC once and save it there.
+   > 中文：如果 `data/company_tickers.json` 不存在，就从 SEC 下载一次并保存到这里。
+2. Read the file and return its entries as a list of `{cik_str, ticker, title}` dicts.
+   > 中文：读取文件，把里面的条目作为 `{cik_str, ticker, title}` 字典列表返回。
+
+**`filings.py` -> `normalize_title(title)`**
+1. Lowercase the title, remove state tags like `/DE/`, and turn punctuation into spaces.
+   > 中文：把公司名转成小写，去掉 `/DE/` 这类州名标记，并把标点符号换成空格。
+2. Drop legal-form words (inc, corp, corporation, co, ltd, holdings), so `"Tesla, Inc."` becomes `"tesla"`.
+   > 中文：去掉表示公司类型的词（inc、corp、corporation、co、ltd、holdings），所以 `"Tesla, Inc."` 变成 `"tesla"`。
+
+**`filings.py` -> `find_tickers(question, companies)`** (pure function: no network, easy to test)
+1. Map each company (CIK) to its first-listed ticker, so Alphabet's GOOGL and GOOG count as one company, reported as GOOGL.
+   > 中文：把每家公司（CIK）对应到它排在第一位的股票代码，这样 Alphabet 的 GOOGL 和 GOOG 算同一家公司，统一报告为 GOOGL。
+2. Build a name table from normalized titles (skipping names shorter than 4 characters), then add the small alias list (e.g. `google` -> GOOGL).
+   > 中文：用标准化后的公司名建一张名称表（跳过少于 4 个字符的名字），再加上一个很小的别名表（比如 `google` -> GOOGL）。
+3. Split the question into words. A word that is all uppercase, 2+ letters, a real ticker, and not in `IGNORED_TICKERS` (AI, IT, ...) counts as a ticker match.
+   > 中文：把问题拆成单词。一个单词如果全是大写字母、至少 2 个字母、是真实的股票代码、并且不在 `IGNORED_TICKERS`（AI、IT 等）里，就算匹配到一个股票代码。
+4. Starting at each capitalized word, check windows of 1, 2, 3, ... words against the name table. A hit counts as a name match.
+   > 中文：从每个首字母大写的单词开始，依次拿 1 个、2 个、3 个……单词组成的窗口去名称表里查。查到就算匹配到一个公司名。
+5. Return `{phrase: [candidate tickers]}`. One candidate means a sure match; several mean the name is ambiguous.
+   > 中文：返回 `{词组: [候选股票代码]}`。只有一个候选就是确定匹配；有多个就说明这个名字有歧义。
+
+### Terms
+
+- **CIK (one company, many tickers)** — SEC's permanent company ID. One CIK can have several tickers (share classes, preferred shares), e.g. Alphabet has GOOGL, GOOG, GOOGN, GOOGM.
+  > 中文：CIK 是 SEC 给每家公司的永久编号。一个 CIK 可以有好几个股票代码（不同股份类别、优先股），比如 Alphabet 有 GOOGL、GOOG、GOOGN、GOOGM。按 CIK 去重，就不会把同一家公司当成有歧义，也不会重复建索引。
+
+- **Normalization** — turning text into one standard form before comparing it (lowercase, no punctuation, no "Inc.").
+  > 中文：标准化是指在比较之前，先把文字转换成统一格式（小写、去掉标点、去掉 "Inc." 等）。这样 "Tesla, Inc." 和问题里的 "Tesla's" 才能对上。
+
+- **Whole-word matching / word window** — comparing complete words (not substrings) and trying runs of consecutive words (an n-gram window) against known names.
+  > 中文：整词匹配是比较完整的单词而不是字符串片段，所以 "Metaverse" 不会匹配到 "meta"。词窗口（n-gram）是把连续的几个单词拼在一起去查表，这样多词公司名（如 "bank of america"）也能匹配到。
+
+- **Capitalization heuristic** — a name only counts if its first word is capitalized in the question, a cheap signal that it's a proper noun.
+  > 中文：大写启发式规则：只有在问题里首字母大写时，名字才算数，这是判断专有名词的一个简单信号。它能避免 "on target" 被误认为 Target 公司，代价是小写的 "tesla" 识别不到。
+
+- **Stoplist (`IGNORED_TICKERS`)** — a short list of real tickers (AI, IT, USA, ON, ALL, NOW, HBM, TV, PC, AR, EU, UK) that are ignored because in a question they almost always mean the ordinary word or acronym.
+  > 中文：停用列表（`IGNORED_TICKERS`）是一小组真实存在但会被忽略的股票代码（AI、IT、USA、ON、ALL、NOW、HBM、TV、PC、AR、EU、UK），因为它们在问题里几乎总是指普通单词或缩写，而不是公司。
+
+- **Pure function** — a function whose output depends only on its inputs, with no network, files, or prompts.
+  > 中文：纯函数是指输出只取决于输入的函数，不访问网络、不读写文件、不弹出提示。`find_tickers` 是纯函数，所以测试只需要传一个假的公司列表，不用联网。
