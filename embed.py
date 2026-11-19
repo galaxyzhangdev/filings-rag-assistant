@@ -55,26 +55,6 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
     return embeddings
 
 
-# Previous version: embeddings stored back into the ticker's chunk JSON file (a local .json cache),
-# checked via an "embedding" field on the first chunk. Kept here, commented out, for comparison -- see
-# NOTES.md / INTERVIEW_NOTES.md Step 3 for why this was upgraded to Chroma.
-# Reference only, not runnable as-is: it needs json and ingest's DATA_DIR, which this file no longer imports.
-#
-# def embed_ticker(ticker: str) -> list[dict]:
-#     """Return a ticker's chunks with embeddings added, embedding and caching them only if not already done."""
-#     chunks = ingest_ticker(ticker)
-#     if chunks and "embedding" in chunks[0]:
-#         return chunks
-#
-#     embeddings = embed_texts([c["text"] for c in chunks])
-#     for chunk, embedding in zip(chunks, embeddings):
-#         chunk["embedding"] = embedding
-#
-#     cache_path = DATA_DIR / f"{ticker.upper()}_chunks.json"
-#     cache_path.write_text(json.dumps(chunks))
-#     return chunks
-
-
 def is_indexed(ticker: str) -> bool:
     """Return True if a ticker's chunks are already stored in the Chroma collection."""
     return bool(collection.get(where={"ticker": ticker.upper()}, limit=1)["ids"])

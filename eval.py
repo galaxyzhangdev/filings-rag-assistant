@@ -40,7 +40,7 @@ EVAL_SET = [
 ]
 
 # Separate keyword_exact set (exact figures / specific terms), reported apart from the original 18 above.
-# Written from chunks actually stored in Chroma; see NOTES.md Step 7.
+# Written from chunks actually stored in Chroma.
 KEYWORD_EVAL_SET = [
     {"question": "By what percentage did Micron's CMBU revenue increase in fiscal 2025 compared to 2024?", "category": "keyword_exact"},
     {"question": "What is the interest rate on Micron's 2029 B Notes?", "category": "keyword_exact"},

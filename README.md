@@ -241,12 +241,9 @@ its chunks score relative to another ticker's, at the cost of a fixed
 `top_k * num_tickers` context size instead of a single shared top_k.
 Re-running the eval afterward: all 3 cross-company questions passed.
 
-The original global-top-k version is kept commented out directly above
-the current implementation in `retrieve.py`, for comparison. A second,
-independent revision later moved storage/query itself from a flat JSON
-file + hand-rolled numpy cosine similarity to Chroma; that revision is
-documented the same way (commented out above the current code) and in
-`NOTES.md` (Step 4).
+The original global-top-k version, and a later revision that moved
+storage/query from a flat JSON file + hand-rolled numpy cosine similarity
+to Chroma, are both in the git history of `retrieve.py`.
 
 ### RAG triad evaluation via Arize Phoenix
 
